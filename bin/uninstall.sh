@@ -426,138 +426,174 @@ main() {
     # Hide cursor during operation
     hide_cursor
 
-    # Simplified: always check if we need alt screen for scanning
-    # (scan_applications handles cache internally)
-    local needs_scanning=true
-    local cache_file="$HOME/.cache/mole/app_scan_cache"
-    if [[ $force_rescan == false && -f "$cache_file" ]]; then
-        local cache_age=$(($(date +%s) - $(get_file_mtime "$cache_file")))
-        [[ $cache_age -eq $(date +%s) ]] && cache_age=86401 # Handle missing file
-        [[ $cache_age -lt 86400 ]] && needs_scanning=false
-    fi
+    # Main interaction loop
+    while true; do
+        # Simplified: always check if we need alt screen for scanning
+        # (scan_applications handles cache internally)
+        local needs_scanning=true
+        local cache_file="$HOME/.cache/mole/app_scan_cache"
+        if [[ $force_rescan == false && -f "$cache_file" ]]; then
+            local cache_age=$(($(date +%s) - $(get_file_mtime "$cache_file")))
+            [[ $cache_age -eq $(date +%s) ]] && cache_age=86401 # Handle missing file
+            [[ $cache_age -lt 86400 ]] && needs_scanning=false
+        fi
 
-    # Only enter alt screen if we need scanning (shows progress)
-    if [[ $needs_scanning == true && $use_inline_loading == true ]]; then
-        enter_alt_screen
-        export MOLE_ALT_SCREEN_ACTIVE=1
-        export MOLE_INLINE_LOADING=1
-        export MOLE_MANAGED_ALT_SCREEN=1
-        printf "\033[2J\033[H" >&2
-    else
-        unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN MOLE_ALT_SCREEN_ACTIVE
-    fi
+        # Only enter alt screen if we need scanning (shows progress)
+        if [[ $needs_scanning == true && $use_inline_loading == true ]]; then
+            # Only enter if not already active
+            if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" != "1" ]]; then
+                enter_alt_screen
+                export MOLE_ALT_SCREEN_ACTIVE=1
+                export MOLE_INLINE_LOADING=1
+                export MOLE_MANAGED_ALT_SCREEN=1
+            fi
+            printf "\033[2J\033[H" >&2
+        else
+            # If we don't need scanning but have alt screen from previous iteration, keep it?
+            # Actually, scan_applications might output to stderr.
+            # Let's just unset the flags if we don't need scanning, but keep alt screen if it was active?
+            # No, select_apps_for_uninstall will handle its own screen management.
+            unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN MOLE_ALT_SCREEN_ACTIVE
+            if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+                 leave_alt_screen
+                 unset MOLE_ALT_SCREEN_ACTIVE
+            fi
+        fi
 
-    # Scan applications
-    local apps_file=""
-    if ! apps_file=$(scan_applications "$force_rescan"); then
+        # Scan applications
+        local apps_file=""
+        if ! apps_file=$(scan_applications "$force_rescan"); then
+            if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+                printf "\033[2J\033[H" >&2
+                leave_alt_screen
+                unset MOLE_ALT_SCREEN_ACTIVE
+                unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
+            fi
+            return 1
+        fi
+
         if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
             printf "\033[2J\033[H" >&2
-            leave_alt_screen
-            unset MOLE_ALT_SCREEN_ACTIVE
-            unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
         fi
-        return 1
-    fi
 
-    if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
-        printf "\033[2J\033[H" >&2
-    fi
+        if [[ ! -f "$apps_file" ]]; then
+            # Error message already shown by scan_applications
+            if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+                leave_alt_screen
+                unset MOLE_ALT_SCREEN_ACTIVE
+                unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
+            fi
+            return 1
+        fi
 
-    if [[ ! -f "$apps_file" ]]; then
-        # Error message already shown by scan_applications
+        # Load applications
+        if ! load_applications "$apps_file"; then
+            if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+                leave_alt_screen
+                unset MOLE_ALT_SCREEN_ACTIVE
+                unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
+            fi
+            rm -f "$apps_file"
+            return 1
+        fi
+
+        # Interactive selection using paginated menu
+        if ! select_apps_for_uninstall; then
+            if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+                leave_alt_screen
+                unset MOLE_ALT_SCREEN_ACTIVE
+                unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
+            fi
+            show_cursor
+            clear_screen
+            printf '\033[2J\033[H' >&2 # Also clear stderr
+            rm -f "$apps_file"
+            # User cancelled selection, exit the loop
+            return 0
+        fi
+
+        # Always clear on exit from selection, regardless of alt screen state
         if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
             leave_alt_screen
             unset MOLE_ALT_SCREEN_ACTIVE
             unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
         fi
-        return 1
-    fi
 
-    # Load applications
-    if ! load_applications "$apps_file"; then
-        if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
-            leave_alt_screen
-            unset MOLE_ALT_SCREEN_ACTIVE
-            unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
-        fi
-        rm -f "$apps_file"
-        return 1
-    fi
-
-    # Interactive selection using paginated menu
-    if ! select_apps_for_uninstall; then
-        if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
-            leave_alt_screen
-            unset MOLE_ALT_SCREEN_ACTIVE
-            unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
-        fi
+        # Restore cursor and clear screen (output to both stdout and stderr for reliability)
         show_cursor
         clear_screen
-        printf '\033[2J\033[H' >&2 # Also clear stderr
-        rm -f "$apps_file"
-        return 0
-    fi
-
-    # Always clear on exit from selection, regardless of alt screen state
-    if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
-        leave_alt_screen
-        unset MOLE_ALT_SCREEN_ACTIVE
-        unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
-    fi
-
-    # Restore cursor and clear screen (output to both stdout and stderr for reliability)
-    show_cursor
-    clear_screen
-    printf '\033[2J\033[H' >&2 # Also clear stderr in case of mixed output
-    local selection_count=${#selected_apps[@]}
-    if [[ $selection_count -eq 0 ]]; then
-        echo "No apps selected"
-        rm -f "$apps_file"
-        return 0
-    fi
-    # Show selected apps with clean alignment
-    echo -e "${BLUE}${ICON_CONFIRM}${NC} Selected ${selection_count} app(s):"
-    local -a summary_rows=()
-    local max_name_width=0
-    local max_size_width=0
-    local name_trunc_limit=30
-
-    for selected_app in "${selected_apps[@]}"; do
-        IFS='|' read -r epoch app_path app_name bundle_id size last_used size_kb <<< "$selected_app"
-
-        local display_name="$app_name"
-        if [[ ${#display_name} -gt $name_trunc_limit ]]; then
-            display_name="${display_name:0:$((name_trunc_limit - 3))}..."
+        printf '\033[2J\033[H' >&2 # Also clear stderr in case of mixed output
+        local selection_count=${#selected_apps[@]}
+        if [[ $selection_count -eq 0 ]]; then
+            echo "No apps selected"
+            rm -f "$apps_file"
+            # Loop back or exit? If select_apps_for_uninstall returns 0 but empty selection,
+            # it technically shouldn't happen based on that function's logic.
+            continue
         fi
-        [[ ${#display_name} -gt $max_name_width ]] && max_name_width=${#display_name}
+        # Show selected apps with clean alignment
+        echo -e "${BLUE}${ICON_CONFIRM}${NC} Selected ${selection_count} app(s):"
+        local -a summary_rows=()
+        local max_name_width=0
+        local max_size_width=0
+        local name_trunc_limit=30
 
-        local size_display="$size"
-        if [[ -z "$size_display" || "$size_display" == "0" || "$size_display" == "N/A" ]]; then
-            size_display="Unknown"
-        fi
-        [[ ${#size_display} -gt $max_size_width ]] && max_size_width=${#size_display}
+        for selected_app in "${selected_apps[@]}"; do
+            IFS='|' read -r epoch app_path app_name bundle_id size last_used size_kb <<< "$selected_app"
 
-        local last_display
-        last_display=$(format_last_used_summary "$last_used")
+            local display_name="$app_name"
+            if [[ ${#display_name} -gt $name_trunc_limit ]]; then
+                display_name="${display_name:0:$((name_trunc_limit - 3))}..."
+            fi
+            [[ ${#display_name} -gt $max_name_width ]] && max_name_width=${#display_name}
 
-        summary_rows+=("$display_name|$size_display|$last_display")
+            local size_display="$size"
+            if [[ -z "$size_display" || "$size_display" == "0" || "$size_display" == "N/A" ]]; then
+                size_display="Unknown"
+            fi
+            [[ ${#size_display} -gt $max_size_width ]] && max_size_width=${#size_display}
+
+            local last_display
+            last_display=$(format_last_used_summary "$last_used")
+
+            summary_rows+=("$display_name|$size_display|$last_display")
+        done
+
+        ((max_name_width < 16)) && max_name_width=16
+        ((max_size_width < 5)) && max_size_width=5
+
+        local index=1
+        for row in "${summary_rows[@]}"; do
+            IFS='|' read -r name_cell size_cell last_cell <<< "$row"
+            printf "%d. %-*s  %*s  |  Last: %s\n" "$index" "$max_name_width" "$name_cell" "$max_size_width" "$size_cell" "$last_cell"
+            ((index++))
+        done
+
+        # Execute batch uninstallation (handles confirmation)
+        batch_uninstall_applications
+
+        # Cleanup current apps file
+        rm -f "$apps_file"
+
+        # Pause before looping back
+        echo -e "${GRAY}Press Enter to return to application list, ESC to exit...${NC}"
+        local key
+        IFS= read -r -s -n1 key || key=""
+        drain_pending_input # Clean up any escape sequence remnants
+        case "$key" in
+            $'\e' | q | Q)
+                show_cursor
+                return 0
+                ;;
+            *)
+                # Continue loop
+                ;;
+        esac
+        
+        # Reset force_rescan to false for subsequent loops, 
+        # but relying on batch_uninstall's cache deletion for actual update
+        force_rescan=false
     done
-
-    ((max_name_width < 16)) && max_name_width=16
-    ((max_size_width < 5)) && max_size_width=5
-
-    local index=1
-    for row in "${summary_rows[@]}"; do
-        IFS='|' read -r name_cell size_cell last_cell <<< "$row"
-        printf "%d. %-*s  %*s  |  Last: %s\n" "$index" "$max_name_width" "$name_cell" "$max_size_width" "$size_cell" "$last_cell"
-        ((index++))
-    done
-
-    # Execute batch uninstallation (handles confirmation)
-    batch_uninstall_applications
-
-    # Cleanup
-    rm -f "$apps_file"
 }
 
 # Run main function
