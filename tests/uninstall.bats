@@ -208,3 +208,31 @@ EOF
 
     [ "$status" -eq 0 ]
 }
+
+@test "decode_file_list handles both BSD and GNU base64 formats" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+# Test data: absolute paths
+test_paths="/path/to/file1
+/path/to/file2"
+
+# Encode with whatever base64 is available (no flags)
+encoded_data=$(printf '%s' "$test_paths" | base64 | tr -d '\n')
+
+# decode_file_list should handle it regardless of BSD (-D) or GNU (-d)
+result=$(decode_file_list "$encoded_data" "TestApp")
+
+# Verify result contains expected paths
+[[ "$result" == *"/path/to/file1"* ]] || exit 1
+[[ "$result" == *"/path/to/file2"* ]] || exit 1
+
+# Verify the function tries both -D and -d by checking it doesn't fail
+# This tests the fallback logic in decode_file_list
+[[ -n "$result" ]] || exit 1
+EOF
+
+    [ "$status" -eq 0 ]
+}

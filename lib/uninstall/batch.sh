@@ -9,6 +9,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Batch uninstall functionality with minimal confirmations
 # Replaces the overly verbose individual confirmation approach
 
+# ============================================================================
+# Configuration: User Data Detection Patterns
+# ============================================================================
+# Directories that typically contain user-customized configurations, themes,
+# or personal data that users might want to backup before uninstalling
+readonly SENSITIVE_DATA_PATTERNS=(
+    "\.warp"                                    # Warp terminal configs/themes
+    "/\.config/"                                # Standard Unix config directory
+    "/themes/"                                  # Theme customizations
+    "/settings/"                                # Settings directories
+    "/Application Support/[^/]+/User Data"      # Chrome/Electron user data
+    "/Preferences/[^/]+\.plist"                 # User preference files
+    "/Documents/"                               # User documents
+    "/\.ssh/"                                   # SSH keys and configs (critical)
+    "/\.gnupg/"                                 # GPG keys (critical)
+)
+
+# Join patterns into a single regex for grep
+SENSITIVE_DATA_REGEX=$(IFS='|'; echo "${SENSITIVE_DATA_PATTERNS[*]}")
+
 # Decode and validate base64 encoded file list
 # Returns decoded string if valid, empty string otherwise
 decode_file_list() {
@@ -16,26 +36,31 @@ decode_file_list() {
     local app_name="$2"
     local decoded
 
-    # Decode base64 data
-    if ! decoded=$(printf '%s' "$encoded" | base64 -d 2> /dev/null); then
-        log_error "Failed to decode file list for $app_name"
-        echo ""
-        return 1
+    # Decode base64 data (macOS uses -D, GNU uses -d)
+    # Try macOS format first, then GNU format for compatibility
+    # IMPORTANT: Always return 0 to prevent set -e from terminating the script
+    if ! decoded=$(printf '%s' "$encoded" | base64 -D 2> /dev/null); then
+        # Fallback to GNU base64 format
+        if ! decoded=$(printf '%s' "$encoded" | base64 -d 2> /dev/null); then
+            log_error "Failed to decode file list for $app_name" >&2
+            echo ""
+            return 0  # Return success with empty string
+        fi
     fi
 
     # Validate decoded data doesn't contain null bytes
     if [[ "$decoded" =~ $'\0' ]]; then
-        log_warning "File list for $app_name contains null bytes, rejecting"
+        log_warning "File list for $app_name contains null bytes, rejecting" >&2
         echo ""
-        return 1
+        return 0  # Return success with empty string
     fi
 
     # Validate paths look reasonable (each line should be a path or empty)
     while IFS= read -r line; do
         if [[ -n "$line" && ! "$line" =~ ^/ ]]; then
-            log_warning "Invalid path in file list for $app_name: $line"
+            log_warning "Invalid path in file list for $app_name: $line" >&2
             echo ""
-            return 1
+            return 0  # Return success with empty string
         fi
     done <<< "$decoded"
 
@@ -50,19 +75,27 @@ stop_launch_services() {
     local bundle_id="$1"
     local has_system_files="${2:-false}"
 
+    [[ -z "$bundle_id" || "$bundle_id" == "unknown" ]] && return 0
+
     # User-level Launch Agents
-    for plist in ~/Library/LaunchAgents/"$bundle_id"*.plist; do
-        [[ -f "$plist" ]] && launchctl unload "$plist" 2> /dev/null || true
-    done
+    if [[ -d ~/Library/LaunchAgents ]]; then
+        while IFS= read -r -d '' plist; do
+            launchctl unload "$plist" 2> /dev/null || true
+        done < <(find ~/Library/LaunchAgents -maxdepth 1 -name "${bundle_id}*.plist" -print0 2> /dev/null)
+    fi
 
     # System-level services (requires sudo)
     if [[ "$has_system_files" == "true" ]]; then
-        for plist in /Library/LaunchAgents/"$bundle_id"*.plist; do
-            [[ -f "$plist" ]] && sudo launchctl unload "$plist" 2> /dev/null || true
-        done
-        for plist in /Library/LaunchDaemons/"$bundle_id"*.plist; do
-            [[ -f "$plist" ]] && sudo launchctl unload "$plist" 2> /dev/null || true
-        done
+        if [[ -d /Library/LaunchAgents ]]; then
+            while IFS= read -r -d '' plist; do
+                sudo launchctl unload "$plist" 2> /dev/null || true
+            done < <(find /Library/LaunchAgents -maxdepth 1 -name "${bundle_id}*.plist" -print0 2> /dev/null)
+        fi
+        if [[ -d /Library/LaunchDaemons ]]; then
+            while IFS= read -r -d '' plist; do
+                sudo launchctl unload "$plist" 2> /dev/null || true
+            done < <(find /Library/LaunchDaemons -maxdepth 1 -name "${bundle_id}*.plist" -print0 2> /dev/null)
+        fi
     fi
 }
 
@@ -131,8 +164,16 @@ batch_uninstall_applications() {
         fi
 
         # Check if app requires sudo to delete (either app bundle or system files)
+        # Need sudo if:
+        # 1. Parent directory is not writable (may be owned by another user or root)
+        # 2. App owner is root
+        # 3. App owner is different from current user
         local needs_sudo=false
-        if [[ ! -w "$(dirname "$app_path")" ]] || [[ "$(get_file_owner "$app_path")" == "root" ]]; then
+        local app_owner=$(get_file_owner "$app_path")
+        local current_user=$(whoami)
+        if [[ ! -w "$(dirname "$app_path")" ]] || \
+           [[ "$app_owner" == "root" ]] || \
+           [[ -n "$app_owner" && "$app_owner" != "$current_user" ]]; then
             needs_sudo=true
         fi
 
@@ -158,13 +199,20 @@ batch_uninstall_applications() {
             sudo_apps+=("$app_name")
         fi
 
+        # Check for sensitive user data (performance optimization: do this once)
+        local has_sensitive_data="false"
+        if [[ -n "$related_files" ]] && echo "$related_files" | grep -qE "$SENSITIVE_DATA_REGEX"; then
+            has_sensitive_data="true"
+        fi
+
         # Store details for later use
         # Base64 encode file lists to handle multi-line data safely (single line)
         local encoded_files
         encoded_files=$(printf '%s' "$related_files" | base64 | tr -d '\n')
         local encoded_system_files
         encoded_system_files=$(printf '%s' "$system_files" | base64 | tr -d '\n')
-        app_details+=("$app_name|$app_path|$bundle_id|$total_kb|$encoded_files|$encoded_system_files")
+        # Store needs_sudo to avoid recalculating during deletion phase
+        app_details+=("$app_name|$app_path|$bundle_id|$total_kb|$encoded_files|$encoded_system_files|$has_sensitive_data|$needs_sudo")
     done
     if [[ -t 1 ]]; then stop_inline_spinner; fi
 
@@ -175,8 +223,25 @@ batch_uninstall_applications() {
     echo ""
     echo -e "${PURPLE_BOLD}Files to be removed:${NC}"
     echo ""
+
+    # Check for apps with user data that might need backup
+    # Performance optimization: use pre-calculated flags from app_details
+    local has_user_data=false
     for detail in "${app_details[@]}"; do
-        IFS='|' read -r app_name app_path bundle_id total_kb encoded_files encoded_system_files <<< "$detail"
+        IFS='|' read -r _ _ _ _ _ _ has_sensitive_data <<< "$detail"
+        if [[ "$has_sensitive_data" == "true" ]]; then
+            has_user_data=true
+            break
+        fi
+    done
+
+    if [[ "$has_user_data" == "true" ]]; then
+        echo -e "${YELLOW}${ICON_WARNING}${NC} ${YELLOW}Note: Some apps contain user configurations/themes${NC}"
+        echo ""
+    fi
+
+    for detail in "${app_details[@]}"; do
+        IFS='|' read -r app_name app_path bundle_id total_kb encoded_files encoded_system_files has_sensitive_data needs_sudo_flag <<< "$detail"
         local related_files=$(decode_file_list "$encoded_files" "$app_name")
         local system_files=$(decode_file_list "$encoded_system_files" "$app_name")
         local app_size_display=$(bytes_to_human "$((total_kb * 1024))")
@@ -281,12 +346,12 @@ batch_uninstall_applications() {
     local -a failed_items=()
     local -a success_items=()
     for detail in "${app_details[@]}"; do
-        IFS='|' read -r app_name app_path bundle_id total_kb encoded_files encoded_system_files <<< "$detail"
+        IFS='|' read -r app_name app_path bundle_id total_kb encoded_files encoded_system_files has_sensitive_data needs_sudo <<< "$detail"
         local related_files=$(decode_file_list "$encoded_files" "$app_name")
         local system_files=$(decode_file_list "$encoded_system_files" "$app_name")
         local reason=""
-        local needs_sudo=false
-        [[ ! -w "$(dirname "$app_path")" || "$(get_file_owner "$app_path")" == "root" ]] && needs_sudo=true
+
+        # Note: needs_sudo is already calculated during scanning phase (performance optimization)
 
         # Stop Launch Agents and Daemons before removal
         local has_system_files="false"
@@ -301,7 +366,16 @@ batch_uninstall_applications() {
         # Remove the application only if not running
         if [[ -z "$reason" ]]; then
             if [[ "$needs_sudo" == true ]]; then
-                safe_sudo_remove "$app_path" || reason="remove failed"
+                if ! safe_sudo_remove "$app_path"; then
+                    # Determine specific failure reason (only fetch owner info when needed)
+                    local app_owner=$(get_file_owner "$app_path")
+                    local current_user=$(whoami)
+                    if [[ -n "$app_owner" && "$app_owner" != "$current_user" && "$app_owner" != "root" ]]; then
+                        reason="owned by $app_owner"
+                    else
+                        reason="permission denied"
+                    fi
+                fi
             else
                 safe_remove "$app_path" true || reason="remove failed"
             fi
@@ -313,6 +387,23 @@ batch_uninstall_applications() {
             remove_file_list "$related_files" "false" > /dev/null
             # Remove system-level files (requires sudo)
             remove_file_list "$system_files" "true" > /dev/null
+
+            # Clean up macOS defaults (preference domain)
+            # This removes configuration data stored in the macOS defaults system
+            # Note: This complements plist file deletion by clearing cached preferences
+            if [[ -n "$bundle_id" && "$bundle_id" != "unknown" ]]; then
+                # 1. Standard defaults domain cleanup
+                if defaults read "$bundle_id" &> /dev/null; then
+                    defaults delete "$bundle_id" 2> /dev/null || true
+                fi
+
+                # 2. Clean up ByHost preferences (machine-specific configs)
+                # These are often missed by standard cleanup tools
+                # Format: ~/Library/Preferences/ByHost/com.app.id.XXXX.plist
+                if [[ -d ~/Library/Preferences/ByHost ]]; then
+                    find ~/Library/Preferences/ByHost -maxdepth 1 -name "${bundle_id}.*.plist" -delete 2>/dev/null || true
+                fi
+            fi
 
             ((total_size_freed += total_kb))
             ((success_count++))
@@ -394,7 +485,8 @@ batch_uninstall_applications() {
             case "$first_reason" in
                 still*running*) reason_summary="is still running" ;;
                 remove*failed*) reason_summary="could not be removed" ;;
-                permission*) reason_summary="permission denied" ;;
+                permission*denied*) reason_summary="permission denied" ;;
+                owned*by*) reason_summary="$first_reason (try with sudo)" ;;
                 *) reason_summary="$first_reason" ;;
             esac
         fi

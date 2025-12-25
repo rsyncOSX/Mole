@@ -930,18 +930,4 @@ force_kill_app() {
     pgrep -x "$match_pattern" > /dev/null 2>&1 && return 1 || return 0
 }
 
-# Calculate total size of files (consolidated from duplicates)
-calculate_total_size() {
-    local files="$1"
-    local total_kb=0
-
-    while IFS= read -r file; do
-        if [[ -n "$file" && -e "$file" ]]; then
-            local size_kb
-            size_kb=$(get_path_size_kb "$file")
-            ((total_kb += size_kb))
-        fi
-    done <<< "$files"
-
-    echo "$total_kb"
-}
+# Note: calculate_total_size() is defined in lib/core/file_ops.sh
