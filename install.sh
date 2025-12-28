@@ -40,10 +40,11 @@ fi; }
 VERBOSE=1
 
 # Icons (duplicated from lib/core/common.sh - necessary as install.sh runs standalone)
-readonly ICON_SUCCESS="✓"
-readonly ICON_ADMIN="●"
-readonly ICON_CONFIRM="◎"
-readonly ICON_ERROR="☻"
+# Note: Don't use 'readonly' here to avoid conflicts when sourcing common.sh later
+ICON_SUCCESS="✓"
+ICON_ADMIN="●"
+ICON_CONFIRM="◎"
+ICON_ERROR="☻"
 
 # Logging functions
 log_info() { [[ ${VERBOSE} -eq 1 ]] && echo -e "${BLUE}$1${NC}"; }
@@ -60,6 +61,21 @@ SOURCE_DIR=""
 
 # Default action (install|update)
 ACTION="install"
+
+# Check if we need sudo for install directory operations
+needs_sudo() {
+    [[ "$INSTALL_DIR" == "/usr/local/bin" ]] && [[ ! -w "$INSTALL_DIR" ]]
+}
+
+# Execute command with sudo if needed
+# Usage: maybe_sudo cp source dest
+maybe_sudo() {
+    if needs_sudo; then
+        sudo "$@"
+    else
+        "$@"
+    fi
+}
 
 show_help() {
     cat << 'EOF'
@@ -120,13 +136,18 @@ resolve_source_dir() {
 
     start_line_spinner "Fetching Mole source..."
     if command -v curl > /dev/null 2>&1; then
-        if curl -fsSL -o "$tmp/mole.tar.gz" "https://github.com/tw93/mole/archive/refs/heads/main.tar.gz"; then
-            stop_line_spinner
-            tar -xzf "$tmp/mole.tar.gz" -C "$tmp"
-            # Extracted folder name: mole-main
-            if [[ -d "$tmp/mole-main" ]]; then
-                SOURCE_DIR="$tmp/mole-main"
-                return 0
+        if curl -fsSL -o "$tmp/mole.tar.gz" "https://github.com/tw93/mole/archive/refs/heads/main.tar.gz" 2>/dev/null; then
+            if tar -xzf "$tmp/mole.tar.gz" -C "$tmp" 2>/dev/null; then
+                stop_line_spinner
+                # Extracted folder name: Mole-main (capital M)
+                if [[ -d "$tmp/Mole-main" ]]; then
+                    SOURCE_DIR="$tmp/Mole-main"
+                    return 0
+                # Fallback for lowercase (in case GitHub changes it)
+                elif [[ -d "$tmp/mole-main" ]]; then
+                    SOURCE_DIR="$tmp/mole-main"
+                    return 0
+                fi
             fi
         fi
     fi
@@ -239,11 +260,7 @@ check_requirements() {
 create_directories() {
     # Create install directory if it doesn't exist
     if [[ ! -d "$INSTALL_DIR" ]]; then
-        if [[ "$INSTALL_DIR" == "/usr/local/bin" ]] && [[ ! -w "$(dirname "$INSTALL_DIR")" ]]; then
-            sudo mkdir -p "$INSTALL_DIR"
-        else
-            mkdir -p "$INSTALL_DIR"
-        fi
+        maybe_sudo mkdir -p "$INSTALL_DIR"
     fi
 
     # Create config directory
@@ -268,14 +285,11 @@ install_files() {
     # Copy main executable when destination differs
     if [[ -f "$SOURCE_DIR/mole" ]]; then
         if [[ "$source_dir_abs" != "$install_dir_abs" ]]; then
-            if [[ "$INSTALL_DIR" == "/usr/local/bin" ]] && [[ ! -w "$INSTALL_DIR" ]]; then
+            if needs_sudo; then
                 log_admin "Admin access required for /usr/local/bin"
-                sudo cp "$SOURCE_DIR/mole" "$INSTALL_DIR/mole"
-                sudo chmod +x "$INSTALL_DIR/mole"
-            else
-                cp "$SOURCE_DIR/mole" "$INSTALL_DIR/mole"
-                chmod +x "$INSTALL_DIR/mole"
             fi
+            maybe_sudo cp "$SOURCE_DIR/mole" "$INSTALL_DIR/mole"
+            maybe_sudo chmod +x "$INSTALL_DIR/mole"
             log_success "Installed mole to $INSTALL_DIR"
         fi
     else
@@ -288,13 +302,8 @@ install_files() {
         if [[ "$source_dir_abs" == "$install_dir_abs" ]]; then
             log_success "mo alias already present"
         else
-            if [[ "$INSTALL_DIR" == "/usr/local/bin" ]] && [[ ! -w "$INSTALL_DIR" ]]; then
-                sudo cp "$SOURCE_DIR/mo" "$INSTALL_DIR/mo"
-                sudo chmod +x "$INSTALL_DIR/mo"
-            else
-                cp "$SOURCE_DIR/mo" "$INSTALL_DIR/mo"
-                chmod +x "$INSTALL_DIR/mo"
-            fi
+            maybe_sudo cp "$SOURCE_DIR/mo" "$INSTALL_DIR/mo"
+            maybe_sudo chmod +x "$INSTALL_DIR/mo"
             log_success "Installed mo alias"
         fi
     fi
@@ -338,11 +347,7 @@ install_files() {
 
     # Update the mole script to use the config directory when installed elsewhere
     if [[ "$source_dir_abs" != "$install_dir_abs" ]]; then
-        if [[ "$INSTALL_DIR" == "/usr/local/bin" ]] && [[ ! -w "$INSTALL_DIR" ]]; then
-            sudo sed -i '' "s|SCRIPT_DIR=.*|SCRIPT_DIR=\"$CONFIG_DIR\"|" "$INSTALL_DIR/mole"
-        else
-            sed -i '' "s|SCRIPT_DIR=.*|SCRIPT_DIR=\"$CONFIG_DIR\"|" "$INSTALL_DIR/mole"
-        fi
+        maybe_sudo sed -i '' "s|SCRIPT_DIR=.*|SCRIPT_DIR=\"$CONFIG_DIR\"|" "$INSTALL_DIR/mole"
     fi
 }
 
@@ -435,21 +440,15 @@ uninstall_mole() {
 
     # Remove executable
     if [[ -f "$INSTALL_DIR/mole" ]]; then
-        if [[ "$INSTALL_DIR" == "/usr/local/bin" ]] && [[ ! -w "$INSTALL_DIR" ]]; then
+        if needs_sudo; then
             log_admin "Admin access required"
-            sudo rm -f "$INSTALL_DIR/mole"
-        else
-            rm -f "$INSTALL_DIR/mole"
         fi
+        maybe_sudo rm -f "$INSTALL_DIR/mole"
         log_success "Removed mole executable"
     fi
 
     if [[ -f "$INSTALL_DIR/mo" ]]; then
-        if [[ "$INSTALL_DIR" == "/usr/local/bin" ]] && [[ ! -w "$INSTALL_DIR" ]]; then
-            sudo rm -f "$INSTALL_DIR/mo"
-        else
-            rm -f "$INSTALL_DIR/mo"
-        fi
+        maybe_sudo rm -f "$INSTALL_DIR/mo"
         log_success "Removed mo alias"
     fi
 
