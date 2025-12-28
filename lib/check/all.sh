@@ -246,7 +246,7 @@ check_macos_update() {
         fi
 
         if sw_output=$(run_with_timeout 10 softwareupdate -l --no-scan 2> /dev/null); then
-            sw_status=0
+            :
         else
             sw_status=$?
         fi
@@ -257,7 +257,7 @@ check_macos_update() {
 
         # Prefer avoiding false negatives: if the system indicates updates are pending,
         # only clear the flag when softwareupdate explicitly reports no updates.
-        if [[ $sw_status -eq 0 && -n "$sw_output" ]] && echo "$sw_output" | grep -q "No new software available"; then
+        if [[ $sw_status -eq 0 && -n "$sw_output" ]] && echo "$sw_output" | grep -qE '^[[:space:]]*No new software available'; then
             updates_available="false"
         fi
     fi
