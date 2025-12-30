@@ -269,7 +269,7 @@ get_path_size_kb() {
     # Use || echo 0 to ensure failure in du (e.g. permission error) doesn't exit script under set -e
     # Pipefail would normally cause the pipeline to fail if du fails, but || handle catches it.
     local size
-    size=$(command du -sk "$path" 2> /dev/null | awk '{print $1}' || true)
+    size=$(command du -sk "$path" 2> /dev/null | awk 'NR==1 {print $1; exit}' || true)
 
     # Ensure size is a valid number (fix for non-numeric du output)
     if [[ "$size" =~ ^[0-9]+$ ]]; then

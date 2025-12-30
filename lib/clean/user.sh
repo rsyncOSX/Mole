@@ -131,7 +131,14 @@ clean_mail_downloads() {
         if [[ -d "$target_path" ]]; then
             local dir_size_kb=0
             dir_size_kb=$(get_path_size_kb "$target_path")
-            if [[ $dir_size_kb -lt ${MOLE_MAIL_DOWNLOADS_MIN_KB:-5120} ]]; then
+            if ! [[ "$dir_size_kb" =~ ^[0-9]+$ ]]; then
+                dir_size_kb=0
+            fi
+            local min_kb="${MOLE_MAIL_DOWNLOADS_MIN_KB:-5120}"
+            if ! [[ "$min_kb" =~ ^[0-9]+$ ]]; then
+                min_kb=5120
+            fi
+            if [[ "$dir_size_kb" -lt "$min_kb" ]]; then
                 continue
             fi
             while IFS= read -r -d '' file_path; do

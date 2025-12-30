@@ -122,7 +122,7 @@ whitelist_skipped_count=0
 
 # shellcheck disable=SC2329
 note_activity() {
-    if [[ $TRACK_SECTION -eq 1 ]]; then
+    if [[ "${TRACK_SECTION:-0}" == "1" ]]; then
         SECTION_ACTIVITY=1
     fi
 }
@@ -183,7 +183,7 @@ start_section() {
 end_section() {
     stop_section_spinner
 
-    if [[ $TRACK_SECTION -eq 1 && $SECTION_ACTIVITY -eq 0 ]]; then
+    if [[ "${TRACK_SECTION:-0}" == "1" && "${SECTION_ACTIVITY:-0}" == "0" ]]; then
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Nothing to clean"
     fi
     TRACK_SECTION=0
@@ -275,7 +275,7 @@ safe_clean() {
         return 0
     fi
 
-    if [[ $TRACK_SECTION -eq 1 && $SECTION_ACTIVITY -eq 0 ]]; then
+    if [[ "${TRACK_SECTION:-0}" == "1" && "${SECTION_ACTIVITY:-0}" == "0" ]]; then
         stop_section_spinner
     fi
 

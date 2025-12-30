@@ -569,7 +569,7 @@ start_section() {
 # End a section
 # Shows "Nothing to tidy" if no activity was recorded
 end_section() {
-    if [[ $TRACK_SECTION -eq 1 && $SECTION_ACTIVITY -eq 0 ]]; then
+    if [[ "${TRACK_SECTION:-0}" == "1" && "${SECTION_ACTIVITY:-0}" == "0" ]]; then
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Nothing to tidy"
     fi
     TRACK_SECTION=0
@@ -577,7 +577,7 @@ end_section() {
 
 # Mark activity in current section
 note_activity() {
-    if [[ $TRACK_SECTION -eq 1 ]]; then
+    if [[ "${TRACK_SECTION:-0}" == "1" ]]; then
         SECTION_ACTIVITY=1
     fi
 }
