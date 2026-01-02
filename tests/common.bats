@@ -80,22 +80,18 @@ teardown() {
 }
 
 @test "rotate_log_once only checks log size once per session" {
-    # Create a log file exceeding the max size
     local log_file="$HOME/.config/mole/mole.log"
     mkdir -p "$(dirname "$log_file")"
     dd if=/dev/zero of="$log_file" bs=1024 count=1100 2> /dev/null
 
-    # First call should rotate
     HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/core/common.sh'"
     [[ -f "${log_file}.old" ]]
 
-    # Verify MOLE_LOG_ROTATED was set (rotation happened)
     result=$(HOME="$HOME" MOLE_LOG_ROTATED=1 bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/core/common.sh'; echo \$MOLE_LOG_ROTATED")
     [[ "$result" == "1" ]]
 }
 
 @test "drain_pending_input clears stdin buffer" {
-    # Test that drain_pending_input doesn't hang (using background job with timeout)
     result=$(
         (echo -e "test\ninput" | HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/core/common.sh'; drain_pending_input; echo done") &
         pid=$!
@@ -150,15 +146,12 @@ EOF
 
 
 @test "should_protect_data protects system and critical apps" {
-    # System apps should be protected
     result=$(HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/core/common.sh'; should_protect_data 'com.apple.Safari' && echo 'protected' || echo 'not-protected'")
     [ "$result" = "protected" ]
 
-    # Critical network apps should be protected
     result=$(HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/core/common.sh'; should_protect_data 'com.clash.app' && echo 'protected' || echo 'not-protected'")
     [ "$result" = "protected" ]
 
-    # Regular apps should not be protected
     result=$(HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/core/common.sh'; should_protect_data 'com.example.RegularApp' && echo 'protected' || echo 'not-protected'")
     [ "$result" = "not-protected" ]
 }
@@ -171,7 +164,6 @@ EOF
 }
 
 @test "start_inline_spinner and stop_inline_spinner work in non-TTY" {
-    # Should not hang in non-interactive mode
     result=$(HOME="$HOME" bash --noprofile --norc << 'EOF'
 source "$PROJECT_ROOT/lib/core/common.sh"
 MOLE_SPINNER_PREFIX="  " start_inline_spinner "Testing..."

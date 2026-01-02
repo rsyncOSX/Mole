@@ -75,7 +75,7 @@ scan_applications() {
     local cache_ttl=86400 # 24 hours
     local force_rescan="${1:-false}"
 
-    mkdir -p "$cache_dir" 2> /dev/null
+    ensure_user_dir "$cache_dir"
 
     # Check if cache exists and is fresh
     if [[ $force_rescan == false && -f "$cache_file" ]]; then
@@ -111,40 +111,61 @@ scan_applications() {
 
     # First pass: quickly collect all valid app paths and bundle IDs (NO mdls calls)
     local -a app_data_tuples=()
-    while IFS= read -r -d '' app_path; do
-        if [[ ! -e "$app_path" ]]; then continue; fi
-
-        local app_name
-        app_name=$(basename "$app_path" .app)
-
-        # Skip nested apps (e.g. inside Wrapper/ or Frameworks/ of another app)
-        # Check if parent path component ends in .app (e.g. /Foo.app/Bar.app or /Foo.app/Contents/Bar.app)
-        # This prevents false positives like /Old.apps/Target.app
-        local parent_dir
-        parent_dir=$(dirname "$app_path")
-        if [[ "$parent_dir" == *".app" || "$parent_dir" == *".app/"* ]]; then
-            continue
-        fi
-
-        # Get bundle ID only (fast, no mdls calls in first pass)
-        local bundle_id="unknown"
-        if [[ -f "$app_path/Contents/Info.plist" ]]; then
-            bundle_id=$(defaults read "$app_path/Contents/Info.plist" CFBundleIdentifier 2> /dev/null || echo "unknown")
-        fi
-
-        # Skip system critical apps (input methods, system components)
-        if should_protect_from_uninstall "$bundle_id"; then
-            continue
-        fi
-
-        # Store tuple: app_path|app_name|bundle_id (display_name will be resolved in parallel later)
-        app_data_tuples+=("${app_path}|${app_name}|${bundle_id}")
-    done < <(
-        # Scan both system and user application directories
-        # Using maxdepth 3 to find apps in subdirectories (e.g., Adobe apps in /Applications/Adobe X/)
-        command find /Applications -name "*.app" -maxdepth 3 -print0 2> /dev/null
-        command find ~/Applications -name "*.app" -maxdepth 3 -print0 2> /dev/null
+    local -a app_dirs=(
+        "/Applications"
+        "$HOME/Applications"
     )
+    local vol_app_dir
+    local nullglob_was_set=0
+    shopt -q nullglob && nullglob_was_set=1
+    shopt -s nullglob
+    for vol_app_dir in /Volumes/*/Applications; do
+        [[ -d "$vol_app_dir" && -r "$vol_app_dir" ]] || continue
+        if [[ -d "/Applications" && "$vol_app_dir" -ef "/Applications" ]]; then
+            continue
+        fi
+        if [[ -d "$HOME/Applications" && "$vol_app_dir" -ef "$HOME/Applications" ]]; then
+            continue
+        fi
+        app_dirs+=("$vol_app_dir")
+    done
+    if [[ $nullglob_was_set -eq 0 ]]; then
+        shopt -u nullglob
+    fi
+
+    for app_dir in "${app_dirs[@]}"; do
+        if [[ ! -d "$app_dir" ]]; then continue; fi
+
+        while IFS= read -r -d '' app_path; do
+            if [[ ! -e "$app_path" ]]; then continue; fi
+
+            local app_name
+            app_name=$(basename "$app_path" .app)
+
+            # Skip nested apps (e.g. inside Wrapper/ or Frameworks/ of another app)
+            # Check if parent path component ends in .app (e.g. /Foo.app/Bar.app or /Foo.app/Contents/Bar.app)
+            # This prevents false positives like /Old.apps/Target.app
+            local parent_dir
+            parent_dir=$(dirname "$app_path")
+            if [[ "$parent_dir" == *".app" || "$parent_dir" == *".app/"* ]]; then
+                continue
+            fi
+
+            # Get bundle ID only (fast, no mdls calls in first pass)
+            local bundle_id="unknown"
+            if [[ -f "$app_path/Contents/Info.plist" ]]; then
+                bundle_id=$(defaults read "$app_path/Contents/Info.plist" CFBundleIdentifier 2> /dev/null || echo "unknown")
+            fi
+
+            # Skip system critical apps (input methods, system components)
+            if should_protect_from_uninstall "$bundle_id"; then
+                continue
+            fi
+
+            # Store tuple: app_path|app_name|bundle_id (display_name will be resolved in parallel later)
+            app_data_tuples+=("${app_path}|${app_name}|${bundle_id}")
+        done < <(command find "$app_dir" -name "*.app" -maxdepth 3 -print0 2> /dev/null)
+    done
 
     # Second pass: process each app with parallel size calculation
     local app_count=0
@@ -210,9 +231,9 @@ scan_applications() {
         local last_used_epoch=0
 
         if [[ -d "$app_path" ]]; then
-            # Try mdls first with short timeout (0.05s) for accuracy, fallback to mtime for speed
+            # Try mdls first with short timeout (0.1s) for accuracy, fallback to mtime for speed
             local metadata_date
-            metadata_date=$(run_with_timeout 0.05 mdls -name kMDItemLastUsedDate -raw "$app_path" 2> /dev/null || echo "")
+            metadata_date=$(run_with_timeout 0.1 mdls -name kMDItemLastUsedDate -raw "$app_path" 2> /dev/null || echo "")
 
             if [[ "$metadata_date" != "(null)" && -n "$metadata_date" ]]; then
                 last_used_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S %z" "$metadata_date" "+%s" 2> /dev/null || echo "0")
@@ -259,7 +280,9 @@ scan_applications() {
     # Start a background spinner that reads progress from file
     local spinner_pid=""
     (
-        trap 'exit 0' TERM INT EXIT
+        # shellcheck disable=SC2329  # Function invoked indirectly via trap
+        cleanup_spinner() { exit 0; }
+        trap cleanup_spinner TERM INT EXIT
         local spinner_chars="|/-\\"
         local i=0
         while true; do
@@ -344,6 +367,7 @@ scan_applications() {
     fi
 
     # Save to cache (simplified - no metadata)
+    ensure_user_file "$cache_file"
     cp "${temp_file}.sorted" "$cache_file" 2> /dev/null || true
 
     # Return sorted file
@@ -354,7 +378,6 @@ scan_applications() {
     fi
 }
 
-# Load applications into arrays
 load_applications() {
     local apps_file="$1"
 
@@ -403,9 +426,7 @@ cleanup() {
 # Set trap for cleanup on exit
 trap cleanup EXIT INT TERM
 
-# Main function
 main() {
-    # Parse args
     local force_rescan=false
     for arg in "$@"; do
         case "$arg" in
@@ -548,7 +569,43 @@ main() {
         local -a summary_rows=()
         local max_name_width=0
         local max_size_width=0
-        local name_trunc_limit=30
+        local max_last_width=0
+        # First pass: get actual max widths for all columns
+        for selected_app in "${selected_apps[@]}"; do
+            IFS='|' read -r _ _ app_name _ size last_used _ <<< "$selected_app"
+            [[ ${#app_name} -gt $max_name_width ]] && max_name_width=${#app_name}
+            local size_display="$size"
+            [[ -z "$size_display" || "$size_display" == "0" || "$size_display" == "N/A" ]] && size_display="Unknown"
+            [[ ${#size_display} -gt $max_size_width ]] && max_size_width=${#size_display}
+            local last_display=$(format_last_used_summary "$last_used")
+            [[ ${#last_display} -gt $max_last_width ]] && max_last_width=${#last_display}
+        done
+        ((max_size_width < 5)) && max_size_width=5
+        ((max_last_width < 5)) && max_last_width=5
+
+        # Calculate name width: use actual max, but constrain by terminal width
+        # Fixed elements: "99. " (4) + "  " (2) + "  |  Last: " (11) = 17
+        local term_width=$(tput cols 2> /dev/null || echo 100)
+        local available_for_name=$((term_width - 17 - max_size_width - max_last_width))
+
+        # Dynamic minimum for better spacing on wide terminals
+        local min_name_width=24
+        if [[ $term_width -ge 120 ]]; then
+            min_name_width=50
+        elif [[ $term_width -ge 100 ]]; then
+            min_name_width=42
+        elif [[ $term_width -ge 80 ]]; then
+            min_name_width=30
+        fi
+
+        # Constrain name width: dynamic min, max min(actual_max, available, 60)
+        local name_trunc_limit=$max_name_width
+        [[ $name_trunc_limit -lt $min_name_width ]] && name_trunc_limit=$min_name_width
+        [[ $name_trunc_limit -gt $available_for_name ]] && name_trunc_limit=$available_for_name
+        [[ $name_trunc_limit -gt 60 ]] && name_trunc_limit=60
+
+        # Reset for second pass
+        max_name_width=0
 
         for selected_app in "${selected_apps[@]}"; do
             IFS='|' read -r epoch app_path app_name bundle_id size last_used size_kb <<< "$selected_app"
@@ -563,7 +620,6 @@ main() {
             if [[ -z "$size_display" || "$size_display" == "0" || "$size_display" == "N/A" ]]; then
                 size_display="Unknown"
             fi
-            [[ ${#size_display} -gt $max_size_width ]] && max_size_width=${#size_display}
 
             local last_display
             last_display=$(format_last_used_summary "$last_used")
@@ -572,7 +628,6 @@ main() {
         done
 
         ((max_name_width < 16)) && max_name_width=16
-        ((max_size_width < 5)) && max_size_width=5
 
         local index=1
         for row in "${summary_rows[@]}"; do

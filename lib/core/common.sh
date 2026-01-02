@@ -12,7 +12,7 @@ readonly MOLE_COMMON_LOADED=1
 
 _MOLE_CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load core modules in dependency order
+# Load core modules
 source "$_MOLE_CORE_DIR/base.sh"
 source "$_MOLE_CORE_DIR/log.sh"
 
@@ -26,31 +26,54 @@ if [[ -f "$_MOLE_CORE_DIR/sudo.sh" ]]; then
     source "$_MOLE_CORE_DIR/sudo.sh"
 fi
 
-# Update Mole via Homebrew
-# Args: $1 = current version
+# Update via Homebrew
 update_via_homebrew() {
     local current_version="$1"
+    local temp_update temp_upgrade
+    temp_update=$(mktemp_file "brew_update")
+    temp_upgrade=$(mktemp_file "brew_upgrade")
 
+    # Set up trap for interruption (Ctrl+C) with inline cleanup
+    trap 'stop_inline_spinner 2>/dev/null; rm -f "$temp_update" "$temp_upgrade" 2>/dev/null; echo ""; exit 130' INT TERM
+
+    # Update Homebrew
     if [[ -t 1 ]]; then
         start_inline_spinner "Updating Homebrew..."
     else
         echo "Updating Homebrew..."
     fi
-    brew update 2>&1 | grep -Ev "^(==>|Already up-to-date)" || true
+
+    brew update > "$temp_update" 2>&1 &
+    local update_pid=$!
+    wait $update_pid 2> /dev/null || true # Continue even if brew update fails
+
     if [[ -t 1 ]]; then
         stop_inline_spinner
     fi
 
+    # Upgrade Mole
     if [[ -t 1 ]]; then
         start_inline_spinner "Upgrading Mole..."
     else
         echo "Upgrading Mole..."
     fi
+
+    brew upgrade mole > "$temp_upgrade" 2>&1 &
+    local upgrade_pid=$!
+    wait $upgrade_pid 2> /dev/null || true # Continue even if brew upgrade fails
+
     local upgrade_output
-    upgrade_output=$(brew upgrade mole 2>&1) || true
+    upgrade_output=$(cat "$temp_upgrade")
+
     if [[ -t 1 ]]; then
         stop_inline_spinner
     fi
+
+    # Clear trap
+    trap - INT TERM
+
+    # Cleanup temp files
+    rm -f "$temp_update" "$temp_upgrade"
 
     if echo "$upgrade_output" | grep -q "already installed"; then
         local installed_version
@@ -71,12 +94,11 @@ update_via_homebrew() {
         echo ""
     fi
 
-    # Clear update cache
+    # Clear update cache (suppress errors if cache doesn't exist or is locked)
     rm -f "$HOME/.cache/mole/version_check" "$HOME/.cache/mole/update_message" 2> /dev/null || true
 }
 
-# Remove apps from Dock
-# Args: app paths to remove
+# Remove applications from Dock
 remove_apps_from_dock() {
     if [[ $# -eq 0 ]]; then
         return 0
@@ -89,7 +111,7 @@ remove_apps_from_dock() {
         return 0
     fi
 
-    # Execute Python helper to prune dock entries for the given app paths
+    # Prune dock entries using Python helper
     python3 - "$@" << 'PY' 2> /dev/null || return 0
 import os
 import plistlib

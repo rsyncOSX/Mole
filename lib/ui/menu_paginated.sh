@@ -40,7 +40,9 @@ _pm_get_terminal_height() {
 # Calculate dynamic items per page based on terminal height
 _pm_calculate_items_per_page() {
     local term_height=$(_pm_get_terminal_height)
-    local reserved=6 # header(2) + footer(3) + spacing(1)
+    # Reserved: header(1) + blank(1) + blank(1) + footer(1-2) = 4-5 rows
+    # Use 5 to be safe (leaves 1 row buffer when footer wraps to 2 lines)
+    local reserved=5
     local available=$((term_height - reserved))
 
     # Ensure minimum and maximum bounds
@@ -153,6 +155,7 @@ paginated_multi_select() {
     }
 
     local -a selected=()
+    local selected_count=0 # Cache selection count to avoid O(n) loops on every draw
 
     # Initialize selection array
     for ((i = 0; i < total_items; i++)); do
@@ -165,7 +168,11 @@ paginated_multi_select() {
         IFS=',' read -ra initial_indices <<< "$cleaned_preselect"
         for idx in "${initial_indices[@]}"; do
             if [[ "$idx" =~ ^[0-9]+$ && $idx -ge 0 && $idx -lt $total_items ]]; then
-                selected[idx]=true
+                # Only count if not already selected (handles duplicates)
+                if [[ ${selected[idx]} != true ]]; then
+                    selected[idx]=true
+                    ((selected_count++))
+                fi
             fi
         done
     fi
@@ -228,11 +235,13 @@ paginated_multi_select() {
 
         local cols="${COLUMNS:-}"
         [[ -z "$cols" ]] && cols=$(tput cols 2> /dev/null || echo 80)
+        [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
 
         _strip_ansi_len() {
             local text="$1"
             local stripped
-            stripped=$(printf "%s" "$text" | LC_ALL=C awk '{gsub(/\033\[[0-9;]*[A-Za-z]/,""); print}')
+            stripped=$(printf "%s" "$text" | LC_ALL=C awk '{gsub(/\033\[[0-9;]*[A-Za-z]/,""); print}' || true)
+            [[ -z "$stripped" ]] && stripped="$text"
             printf "%d" "${#stripped}"
         }
 
@@ -244,7 +253,10 @@ paginated_multi_select() {
             else
                 candidate="$line${sep}${s}"
             fi
-            if (($(_strip_ansi_len "$candidate") > cols)); then
+            local candidate_len
+            candidate_len=$(_strip_ansi_len "$candidate")
+            [[ -z "$candidate_len" ]] && candidate_len=0
+            if ((candidate_len > cols)); then
                 printf "%s%s\n" "$clear_line" "$line" >&2
                 line="$s"
             else
@@ -382,11 +394,8 @@ paginated_multi_select() {
         printf "\033[H" >&2
         local clear_line="\r\033[2K"
 
-        # Count selections
-        local selected_count=0
-        for ((i = 0; i < total_items; i++)); do
-            [[ ${selected[i]} == true ]] && ((selected_count++))
-        done
+        # Use cached selection count (maintained incrementally on toggle)
+        # No need to loop through all items anymore!
 
         # Header only
         printf "${clear_line}${PURPLE_BOLD}%s${NC}  ${GRAY}%d/%d selected${NC}\n" "${title}" "$selected_count" "$total_items" >&2
@@ -475,6 +484,22 @@ paginated_multi_select() {
 
         # Footer: single line with controls
         local sep=" ${GRAY}|${NC} "
+
+        # Helper to calculate display length without ANSI codes
+        _calc_len() {
+            local text="$1"
+            local stripped
+            stripped=$(printf "%s" "$text" | LC_ALL=C awk '{gsub(/\033\[[0-9;]*[A-Za-z]/,""); print}')
+            printf "%d" "${#stripped}"
+        }
+
+        # Common menu items
+        local nav="${GRAY}${ICON_NAV_UP}${ICON_NAV_DOWN}${NC}"
+        local space_select="${GRAY}Space Select${NC}"
+        local space="${GRAY}Space${NC}"
+        local enter="${GRAY}Enter${NC}"
+        local exit="${GRAY}Q Exit${NC}"
+
         if [[ "$filter_mode" == "true" ]]; then
             # Filter mode: simple controls without sort
             local -a _segs_filter=(
@@ -485,57 +510,82 @@ paginated_multi_select() {
             )
             _print_wrapped_controls "$sep" "${_segs_filter[@]}"
         else
-            # Normal mode - single line compact format
+            # Normal mode - prepare dynamic items
             local reverse_arrow="↑"
             [[ "$sort_reverse" == "true" ]] && reverse_arrow="↓"
 
-            # Determine filter text based on whether filter is active
             local filter_text="/ Search"
             [[ -n "$applied_query" ]] && filter_text="/ Clear"
 
+            local refresh="${GRAY}R Refresh${NC}"
+            local search="${GRAY}${filter_text}${NC}"
+            local sort_ctrl="${GRAY}S ${sort_status}${NC}"
+            local order_ctrl="${GRAY}O ${reverse_arrow}${NC}"
+
             if [[ "$has_metadata" == "true" ]]; then
                 if [[ -n "$applied_query" ]]; then
-                    # Filtering: hide sort controls
-                    local -a _segs_all=(
-                        "${GRAY}${ICON_NAV_UP}${ICON_NAV_DOWN}${NC}"
-                        "${GRAY}Space${NC}"
-                        "${GRAY}Enter${NC}"
-                        "${GRAY}${filter_text}${NC}"
-                        "${GRAY}Q Exit${NC}"
-                    )
+                    # Filtering active: hide sort controls
+                    local -a _segs_all=("$nav" "$space" "$enter" "$refresh" "$search" "$exit")
                     _print_wrapped_controls "$sep" "${_segs_all[@]}"
                 else
-                    # Normal: show full controls
-                    local -a _segs_all=(
-                        "${GRAY}${ICON_NAV_UP}${ICON_NAV_DOWN}${NC}"
-                        "${GRAY}Space Select${NC}"
-                        "${GRAY}Enter${NC}"
-                        "${GRAY}R Refresh${NC}"
-                        "${GRAY}${filter_text}${NC}"
-                        "${GRAY}S ${sort_status}${NC}"
-                        "${GRAY}O ${reverse_arrow}${NC}"
-                        "${GRAY}Q Exit${NC}"
-                    )
-                    _print_wrapped_controls "$sep" "${_segs_all[@]}"
+                    # Normal: show full controls with dynamic reduction
+                    local term_width="${COLUMNS:-}"
+                    [[ -z "$term_width" ]] && term_width=$(tput cols 2> /dev/null || echo 80)
+                    [[ "$term_width" =~ ^[0-9]+$ ]] || term_width=80
+
+                    # Level 0: Full controls
+                    local -a _segs=("$nav" "$space_select" "$enter" "$refresh" "$search" "$sort_ctrl" "$order_ctrl" "$exit")
+
+                    # Calculate width
+                    local total_len=0 seg_count=${#_segs[@]}
+                    for i in "${!_segs[@]}"; do
+                        total_len=$((total_len + $(_calc_len "${_segs[i]}")))
+                        [[ $i -lt $((seg_count - 1)) ]] && total_len=$((total_len + 3))
+                    done
+
+                    # Level 1: Remove "Space Select"
+                    if [[ $total_len -gt $term_width ]]; then
+                        _segs=("$nav" "$enter" "$refresh" "$search" "$sort_ctrl" "$order_ctrl" "$exit")
+
+                        total_len=0
+                        seg_count=${#_segs[@]}
+                        for i in "${!_segs[@]}"; do
+                            total_len=$((total_len + $(_calc_len "${_segs[i]}")))
+                            [[ $i -lt $((seg_count - 1)) ]] && total_len=$((total_len + 3))
+                        done
+
+                        # Level 2: Remove "S ${sort_status}"
+                        if [[ $total_len -gt $term_width ]]; then
+                            _segs=("$nav" "$enter" "$refresh" "$search" "$order_ctrl" "$exit")
+                        fi
+                    fi
+
+                    _print_wrapped_controls "$sep" "${_segs[@]}"
                 fi
             else
                 # Without metadata: basic controls
-                local -a _segs_simple=(
-                    "${GRAY}${ICON_NAV_UP}${ICON_NAV_DOWN}${NC}"
-                    "${GRAY}Space Select${NC}"
-                    "${GRAY}Enter${NC}"
-                    "${GRAY}${filter_text}${NC}"
-                    "${GRAY}Q Exit${NC}"
-                )
+                local -a _segs_simple=("$nav" "$space_select" "$enter" "$refresh" "$search" "$exit")
                 _print_wrapped_controls "$sep" "${_segs_simple[@]}"
             fi
         fi
         printf "${clear_line}" >&2
     }
 
+    # Track previous cursor position for incremental rendering
+    local prev_cursor_pos=$cursor_pos
+    local prev_top_index=$top_index
+    local need_full_redraw=true
+
     # Main interaction loop
     while true; do
-        draw_menu
+        if [[ "$need_full_redraw" == "true" ]]; then
+            draw_menu
+            need_full_redraw=false
+            # Update tracking variables after full redraw
+            prev_cursor_pos=$cursor_pos
+            prev_top_index=$top_index
+        fi
+
         local key
         key=$(read_key)
 
@@ -549,6 +599,7 @@ paginated_multi_select() {
                     top_index=0
                     cursor_pos=0
                     rebuild_view
+                    need_full_redraw=true
                     continue
                 fi
                 cleanup
@@ -558,9 +609,34 @@ paginated_multi_select() {
                 if [[ ${#view_indices[@]} -eq 0 ]]; then
                     :
                 elif [[ $cursor_pos -gt 0 ]]; then
+                    # Simple cursor move - only redraw affected rows
+                    local old_cursor=$cursor_pos
                     ((cursor_pos--))
+                    local new_cursor=$cursor_pos
+
+                    # Calculate terminal row positions (+3: row 1=header, row 2=blank, row 3=first item)
+                    local old_row=$((old_cursor + 3))
+                    local new_row=$((new_cursor + 3))
+
+                    # Quick redraw: update only the two affected rows
+                    printf "\033[%d;1H" "$old_row" >&2
+                    render_item "$old_cursor" false
+                    printf "\033[%d;1H" "$new_row" >&2
+                    render_item "$new_cursor" true
+
+                    # CRITICAL: Move cursor to footer to avoid visual artifacts
+                    printf "\033[%d;1H" "$((items_per_page + 4))" >&2
+
+                    prev_cursor_pos=$cursor_pos
+
+                    # Drain pending input for smoother fast scrolling
+                    drain_pending_input
+                    continue # Skip full redraw
                 elif [[ $top_index -gt 0 ]]; then
                     ((top_index--))
+                    prev_cursor_pos=$cursor_pos
+                    prev_top_index=$top_index
+                    need_full_redraw=true # Scrolling requires full redraw
                 fi
                 ;;
             "DOWN")
@@ -574,7 +650,29 @@ paginated_multi_select() {
                         [[ $visible_count -gt $items_per_page ]] && visible_count=$items_per_page
 
                         if [[ $cursor_pos -lt $((visible_count - 1)) ]]; then
+                            # Simple cursor move - only redraw affected rows
+                            local old_cursor=$cursor_pos
                             ((cursor_pos++))
+                            local new_cursor=$cursor_pos
+
+                            # Calculate terminal row positions (+3: row 1=header, row 2=blank, row 3=first item)
+                            local old_row=$((old_cursor + 3))
+                            local new_row=$((new_cursor + 3))
+
+                            # Quick redraw: update only the two affected rows
+                            printf "\033[%d;1H" "$old_row" >&2
+                            render_item "$old_cursor" false
+                            printf "\033[%d;1H" "$new_row" >&2
+                            render_item "$new_cursor" true
+
+                            # CRITICAL: Move cursor to footer to avoid visual artifacts
+                            printf "\033[%d;1H" "$((items_per_page + 4))" >&2
+
+                            prev_cursor_pos=$cursor_pos
+
+                            # Drain pending input for smoother fast scrolling
+                            drain_pending_input
+                            continue # Skip full redraw
                         elif [[ $((top_index + visible_count)) -lt ${#view_indices[@]} ]]; then
                             ((top_index++))
                             visible_count=$((${#view_indices[@]} - top_index))
@@ -582,6 +680,9 @@ paginated_multi_select() {
                             if [[ $cursor_pos -ge $visible_count ]]; then
                                 cursor_pos=$((visible_count - 1))
                             fi
+                            prev_cursor_pos=$cursor_pos
+                            prev_top_index=$top_index
+                            need_full_redraw=true # Scrolling requires full redraw
                         fi
                     fi
                 fi
@@ -592,9 +693,25 @@ paginated_multi_select() {
                     local real="${view_indices[idx]}"
                     if [[ ${selected[real]} == true ]]; then
                         selected[real]=false
+                        ((selected_count--))
                     else
                         selected[real]=true
+                        ((selected_count++))
                     fi
+
+                    # Incremental update: only redraw header (for count) and current row
+                    # Header is at row 1
+                    printf "\033[1;1H\033[2K${PURPLE_BOLD}%s${NC}  ${GRAY}%d/%d selected${NC}\n" "${title}" "$selected_count" "$total_items" >&2
+
+                    # Redraw current item row (+3: row 1=header, row 2=blank, row 3=first item)
+                    local item_row=$((cursor_pos + 3))
+                    printf "\033[%d;1H" "$item_row" >&2
+                    render_item "$cursor_pos" true
+
+                    # Move cursor to footer to avoid visual artifacts (items + header + 2 blanks)
+                    printf "\033[%d;1H" "$((items_per_page + 4))" >&2
+
+                    continue # Skip full redraw
                 fi
                 ;;
             "RETRY")
@@ -606,12 +723,14 @@ paginated_multi_select() {
                         sort_reverse="true"
                     fi
                     rebuild_view
+                    need_full_redraw=true
                 fi
                 ;;
             "CHAR:s" | "CHAR:S")
                 if [[ "$filter_mode" == "true" ]]; then
                     local ch="${key#CHAR:}"
                     filter_query+="$ch"
+                    need_full_redraw=true
                 elif [[ "$has_metadata" == "true" ]]; then
                     # Cycle sort mode (only if metadata available)
                     case "$sort_mode" in
@@ -620,6 +739,7 @@ paginated_multi_select() {
                         size) sort_mode="date" ;;
                     esac
                     rebuild_view
+                    need_full_redraw=true
                 fi
                 ;;
             "FILTER")
@@ -631,6 +751,7 @@ paginated_multi_select() {
                     top_index=0
                     cursor_pos=0
                     rebuild_view
+                    need_full_redraw=true
                 else
                     # Enter filter mode
                     filter_mode="true"
@@ -639,6 +760,7 @@ paginated_multi_select() {
                     top_index=0
                     cursor_pos=0
                     rebuild_view
+                    need_full_redraw=true
                 fi
                 ;;
             "CHAR:j")
@@ -701,12 +823,14 @@ paginated_multi_select() {
                         sort_reverse="true"
                     fi
                     rebuild_view
+                    need_full_redraw=true
                 fi
                 ;;
             "DELETE")
                 # Backspace filter
                 if [[ "$filter_mode" == "true" && -n "$filter_query" ]]; then
                     filter_query="${filter_query%?}"
+                    need_full_redraw=true
                 fi
                 ;;
             CHAR:*)
@@ -715,6 +839,7 @@ paginated_multi_select() {
                     # avoid accidental leading spaces
                     if [[ -n "$filter_query" || "$ch" != " " ]]; then
                         filter_query+="$ch"
+                        need_full_redraw=true
                     fi
                 fi
                 ;;
@@ -750,6 +875,7 @@ paginated_multi_select() {
                     if [[ $idx -lt ${#view_indices[@]} ]]; then
                         local real="${view_indices[idx]}"
                         selected[real]=true
+                        ((selected_count++))
                     fi
                 fi
 

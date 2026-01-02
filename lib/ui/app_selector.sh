@@ -18,14 +18,33 @@ format_app_display() {
     [[ "$size" != "0" && "$size" != "" && "$size" != "Unknown" ]] && size_str="$size"
 
     # Calculate available width for app name based on terminal width
-    # use passed width or calculate it (but calculation is slow in loops)
+    # Accept pre-calculated max_name_width (5th param) to avoid recalculation in loops
     local terminal_width="${4:-$(tput cols 2> /dev/null || echo 80)}"
-    local fixed_width=28
-    local available_width=$((terminal_width - fixed_width))
+    local max_name_width="${5:-}"
+    local available_width
 
-    # Set reasonable bounds for name width: 24-35 display width
-    [[ $available_width -lt 24 ]] && available_width=24
-    [[ $available_width -gt 35 ]] && available_width=35
+    if [[ -n "$max_name_width" ]]; then
+        # Use pre-calculated width from caller
+        available_width=$max_name_width
+    else
+        # Fallback: calculate it (slower, but works for standalone calls)
+        # Fixed elements: "  ○ " (4) + " " (1) + size (9) + " | " (3) + max_last (7) = 24
+        local fixed_width=24
+        available_width=$((terminal_width - fixed_width))
+
+        # Dynamic minimum for better spacing on wide terminals
+        local min_width=18
+        if [[ $terminal_width -ge 120 ]]; then
+            min_width=48
+        elif [[ $terminal_width -ge 100 ]]; then
+            min_width=38
+        elif [[ $terminal_width -ge 80 ]]; then
+            min_width=25
+        fi
+
+        [[ $available_width -lt $min_width ]] && available_width=$min_width
+        [[ $available_width -gt 60 ]] && available_width=60
+    fi
 
     # Truncate long names if needed (based on display width, not char count)
     local truncated_name
@@ -66,6 +85,31 @@ select_apps_for_uninstall() {
         fi
     fi
 
+    # Pre-scan to get actual max name width
+    local max_name_width=0
+    for app_data in "${apps_data[@]}"; do
+        IFS='|' read -r _ _ display_name _ _ _ _ <<< "$app_data"
+        local name_width=$(get_display_width "$display_name")
+        [[ $name_width -gt $max_name_width ]] && max_name_width=$name_width
+    done
+    # Constrain based on terminal width: fixed=24, min varies by terminal width, max=60
+    local fixed_width=24
+    local available=$((terminal_width - fixed_width))
+
+    # Dynamic minimum: wider terminals get larger minimum for better spacing
+    local min_width=18
+    if [[ $terminal_width -ge 120 ]]; then
+        min_width=48 # Wide terminals: very generous spacing
+    elif [[ $terminal_width -ge 100 ]]; then
+        min_width=38 # Medium-wide terminals: generous spacing
+    elif [[ $terminal_width -ge 80 ]]; then
+        min_width=25 # Standard terminals
+    fi
+
+    [[ $max_name_width -lt $min_width ]] && max_name_width=$min_width
+    [[ $available -lt $max_name_width ]] && max_name_width=$available
+    [[ $max_name_width -gt 60 ]] && max_name_width=60
+
     local -a menu_options=()
     # Prepare metadata (comma-separated) for sorting/filtering inside the menu
     local epochs_csv=""
@@ -74,7 +118,7 @@ select_apps_for_uninstall() {
     for app_data in "${apps_data[@]}"; do
         # Keep extended field 7 (size_kb) if present
         IFS='|' read -r epoch _ display_name _ size last_used size_kb <<< "$app_data"
-        menu_options+=("$(format_app_display "$display_name" "$size" "$last_used" "$terminal_width")")
+        menu_options+=("$(format_app_display "$display_name" "$size" "$last_used" "$terminal_width" "$max_name_width")")
         # Build csv lists (avoid trailing commas)
         if [[ $idx -eq 0 ]]; then
             epochs_csv="${epoch:-0}"
@@ -118,7 +162,6 @@ select_apps_for_uninstall() {
     fi
 
     if [[ $exit_code -ne 0 ]]; then
-        echo "Cancelled"
         return 1
     fi
 

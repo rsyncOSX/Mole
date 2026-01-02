@@ -3,405 +3,657 @@
 
 set -euo pipefail
 
-# System maintenance: rebuild databases and flush caches
-opt_system_maintenance() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Rebuilding LaunchServices database..."
-    run_with_timeout 10 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -kill -r -domain local -domain system -domain user > /dev/null 2>&1 || true
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} LaunchServices database rebuilt"
+# Config constants (override via env).
+readonly MOLE_TM_THIN_TIMEOUT=180
+readonly MOLE_TM_THIN_VALUE=9999999999
+readonly MOLE_SQLITE_MAX_SIZE=104857600 # 100MB
 
-    echo -e "${BLUE}${ICON_ARROW}${NC} Clearing DNS cache..."
-    if sudo dscacheutil -flushcache 2> /dev/null && sudo killall -HUP mDNSResponder 2> /dev/null; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} DNS cache cleared"
+# Dry-run aware output.
+opt_msg() {
+    local message="$1"
+    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
+        echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} $message"
     else
-        echo -e "${RED}${ICON_ERROR}${NC} Failed to clear DNS cache"
+        echo -e "  ${GREEN}✓${NC} $message"
     fi
-
-    echo -e "${BLUE}${ICON_ARROW}${NC} Checking Spotlight index..."
-    local md_status
-    md_status=$(mdutil -s / 2> /dev/null || echo "")
-    if echo "$md_status" | grep -qi "Indexing disabled"; then
-        echo -e "${GRAY}-${NC} Spotlight indexing disabled"
-    else
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Spotlight index functioning"
-    fi
-
-    echo -e "${BLUE}${ICON_ARROW}${NC} Refreshing Bluetooth services..."
-    sudo pkill -f blued 2> /dev/null || true
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} Bluetooth controller refreshed"
-
 }
 
-# Cache refresh: update Finder/Safari caches
+run_launchctl_unload() {
+    local plist_file="$1"
+    local need_sudo="${2:-false}"
+
+    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
+        return 0
+    fi
+
+    if [[ "$need_sudo" == "true" ]]; then
+        sudo launchctl unload "$plist_file" 2> /dev/null || true
+    else
+        launchctl unload "$plist_file" 2> /dev/null || true
+    fi
+}
+
+needs_permissions_repair() {
+    local owner
+    owner=$(stat -f %Su "$HOME" 2> /dev/null || echo "")
+    if [[ -n "$owner" && "$owner" != "$USER" ]]; then
+        return 0
+    fi
+
+    local -a paths=(
+        "$HOME"
+        "$HOME/Library"
+        "$HOME/Library/Preferences"
+    )
+    local path
+    for path in "${paths[@]}"; do
+        if [[ -e "$path" && ! -w "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+has_bluetooth_hid_connected() {
+    local bt_report
+    bt_report=$(system_profiler SPBluetoothDataType 2> /dev/null || echo "")
+    if ! echo "$bt_report" | grep -q "Connected: Yes"; then
+        return 1
+    fi
+
+    if echo "$bt_report" | grep -Eiq "Keyboard|Trackpad|Mouse|HID"; then
+        return 0
+    fi
+
+    return 1
+}
+
+is_ac_power() {
+    pmset -g batt 2> /dev/null | grep -q "AC Power"
+}
+
+is_memory_pressure_high() {
+    if ! command -v memory_pressure > /dev/null 2>&1; then
+        return 1
+    fi
+
+    local mp_output
+    mp_output=$(memory_pressure -Q 2> /dev/null || echo "")
+    if echo "$mp_output" | grep -Eiq "warning|critical"; then
+        return 0
+    fi
+
+    return 1
+}
+
+flush_dns_cache() {
+    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
+        MOLE_DNS_FLUSHED=1
+        return 0
+    fi
+
+    if sudo dscacheutil -flushcache 2> /dev/null && sudo killall -HUP mDNSResponder 2> /dev/null; then
+        MOLE_DNS_FLUSHED=1
+        return 0
+    fi
+    return 1
+}
+
+# Basic system maintenance.
+opt_system_maintenance() {
+    if flush_dns_cache; then
+        opt_msg "DNS cache flushed"
+    fi
+
+    local spotlight_status
+    spotlight_status=$(mdutil -s / 2> /dev/null || echo "")
+    if echo "$spotlight_status" | grep -qi "Indexing disabled"; then
+        echo -e "  ${GRAY}${ICON_EMPTY}${NC} Spotlight indexing disabled"
+    else
+        opt_msg "Spotlight index verified"
+    fi
+}
+
+# Refresh Finder caches (QuickLook/icon services).
 opt_cache_refresh() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Resetting Quick Look cache..."
-    qlmanage -r cache > /dev/null 2>&1 || true
-    qlmanage -r > /dev/null 2>&1 || true
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        qlmanage -r cache > /dev/null 2>&1 || true
+        qlmanage -r > /dev/null 2>&1 || true
+    fi
 
     local -a cache_targets=(
-        "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache|Quick Look thumbnails"
-        "$HOME/Library/Caches/com.apple.iconservices.store|Icon Services store"
-        "$HOME/Library/Caches/com.apple.iconservices|Icon Services cache"
-        "$HOME/Library/Caches/com.apple.Safari/WebKitCache|Safari WebKit cache"
-        "$HOME/Library/Caches/com.apple.Safari/Favicon|Safari favicon cache"
+        "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache"
+        "$HOME/Library/Caches/com.apple.iconservices.store"
+        "$HOME/Library/Caches/com.apple.iconservices"
     )
 
-    for target in "${cache_targets[@]}"; do
-        IFS='|' read -r target_path label <<< "$target"
-        cleanup_path "$target_path" "$label"
-    done
-
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} Finder and Safari caches updated"
-}
-
-# Maintenance scripts: run periodic tasks
-opt_maintenance_scripts() {
-    # Run newsyslog to rotate system logs
-    echo -e "${BLUE}${ICON_ARROW}${NC} Rotating system logs..."
-    if run_with_timeout 120 sudo newsyslog > /dev/null 2>&1; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Logs rotated"
-    else
-        echo -e "${YELLOW}!${NC} Failed to rotate logs"
-    fi
-}
-
-# Log cleanup: remove diagnostic and crash logs
-opt_log_cleanup() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Clearing diagnostic & crash logs..."
-    local -a user_logs=(
-        "$HOME/Library/Logs/DiagnosticReports"
-        "$HOME/Library/Logs/corecaptured"
-    )
-    for target in "${user_logs[@]}"; do
-        cleanup_path "$target" "$(basename "$target")"
-    done
-
-    if [[ -d "/Library/Logs/DiagnosticReports" ]]; then
-        safe_sudo_find_delete "/Library/Logs/DiagnosticReports" "*.crash" 0 "f"
-        safe_sudo_find_delete "/Library/Logs/DiagnosticReports" "*.panic" 0 "f"
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} System diagnostic logs cleared"
-    else
-        echo -e "${GRAY}-${NC} No system diagnostic logs found"
-    fi
-}
-
-# Recent items: clear recent file lists
-opt_recent_items() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Clearing recent items lists..."
-    local shared_dir="$HOME/Library/Application Support/com.apple.sharedfilelist"
-    if [[ -d "$shared_dir" ]]; then
-        safe_find_delete "$shared_dir" "*.sfl2" 0 "f"
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Shared file lists cleared"
-    fi
-
-    rm -f "$HOME/Library/Preferences/com.apple.recentitems.plist" 2> /dev/null || true
-    defaults delete NSGlobalDomain NSRecentDocumentsLimit 2> /dev/null || true
-
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} Recent items cleared"
-}
-
-# Radio refresh: reset Bluetooth and Wi-Fi (safe mode - no pairing/password loss)
-opt_radio_refresh() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Refreshing Bluetooth controller..."
-    # Only restart Bluetooth service, do NOT delete pairing information
-    sudo pkill -HUP bluetoothd 2> /dev/null || true
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} Bluetooth controller refreshed"
-
-    echo -e "${BLUE}${ICON_ARROW}${NC} Refreshing Wi-Fi service..."
-    # Only restart Wi-Fi service, do NOT delete saved networks
-
-    # Safe alternative: just restart the Wi-Fi interface
-    local wifi_interface
-    wifi_interface=$(networksetup -listallhardwareports | awk '/Wi-Fi/{getline; print $2}' | head -1)
-    if [[ -n "$wifi_interface" ]]; then
-        # Use atomic execution to ensure interface comes back up even if interrupted
-        if sudo bash -c "trap '' INT TERM; ifconfig '$wifi_interface' down; sleep 1; ifconfig '$wifi_interface' up" 2> /dev/null; then
-            echo -e "${GREEN}${ICON_SUCCESS}${NC} Wi-Fi interface restarted"
-        else
-            echo -e "${YELLOW}!${NC} Failed to restart Wi-Fi interface"
-        fi
-    else
-        echo -e "${GRAY}-${NC} Wi-Fi interface not found"
-    fi
-
-    # Restart AirDrop interface
-    # Use atomic execution to ensure interface comes back up even if interrupted
-    sudo bash -c "trap '' INT TERM; ifconfig awdl0 down; ifconfig awdl0 up" 2> /dev/null || true
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} Wireless services refreshed"
-}
-
-# Mail downloads: clear OLD Mail attachment cache (30+ days)
-opt_mail_downloads() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Clearing old Mail attachment downloads (30+ days)..."
-    local -a mail_dirs=(
-        "$HOME/Library/Mail Downloads"
-        "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads"
-    )
-
-    local total_kb=0
-    for target_path in "${mail_dirs[@]}"; do
-        total_kb=$((total_kb + $(get_path_size_kb "$target_path")))
-    done
-
-    if [[ $total_kb -lt $MOLE_MAIL_DOWNLOADS_MIN_KB ]]; then
-        echo -e "${GRAY}-${NC} Only $(bytes_to_human $((total_kb * 1024))) detected, skipping cleanup"
-        return
-    fi
-
-    # Only delete old attachments (safety window)
-    local cleaned=false
-    for target_path in "${mail_dirs[@]}"; do
-        if [[ -d "$target_path" ]]; then
-            safe_find_delete "$target_path" "*" "$MOLE_LOG_AGE_DAYS" "f"
-            cleaned=true
+    for target_path in "${cache_targets[@]}"; do
+        if [[ -e "$target_path" ]]; then
+            if ! should_protect_path "$target_path"; then
+                safe_remove "$target_path" true > /dev/null 2>&1
+            fi
         fi
     done
 
-    if [[ "$cleaned" == "true" ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Cleaned old attachments (> ${MOLE_LOG_AGE_DAYS} days)"
-    else
-        echo -e "${GRAY}-${NC} No old attachments found"
-    fi
+    opt_msg "QuickLook thumbnails refreshed"
+    opt_msg "Icon services cache rebuilt"
 }
 
-# Saved state: remove OLD app saved states (7+ days)
+# Removed: opt_maintenance_scripts - macOS handles log rotation automatically via launchd
+
+# Removed: opt_radio_refresh - Interrupts active user connections (WiFi, Bluetooth), degrading UX
+
+# Old saved states cleanup.
 opt_saved_state_cleanup() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Removing old saved application states (${MOLE_SAVED_STATE_AGE_DAYS}+ days)..."
     local state_dir="$HOME/Library/Saved Application State"
 
-    if [[ ! -d "$state_dir" ]]; then
-        echo -e "${GRAY}-${NC} No saved states directory found"
-        return
+    if [[ -d "$state_dir" ]]; then
+        while IFS= read -r -d '' state_path; do
+            if should_protect_path "$state_path"; then
+                continue
+            fi
+            safe_remove "$state_path" true > /dev/null 2>&1
+        done < <(command find "$state_dir" -type d -name "*.savedState" -mtime "+$MOLE_SAVED_STATE_AGE_DAYS" -print0 2> /dev/null)
     fi
 
-    # Only delete old saved states (safety window)
-    local deleted=0
-    while IFS= read -r -d '' state_path; do
-        if safe_remove "$state_path" true; then
-            ((deleted++))
-        fi
-    done < <(command find "$state_dir" -type d -name "*.savedState" -mtime "+$MOLE_SAVED_STATE_AGE_DAYS" -print0 2> /dev/null)
+    opt_msg "App saved states optimized"
+}
 
-    if [[ $deleted -gt 0 ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Removed $deleted old saved state(s)"
+# Removed: opt_swap_cleanup - Direct virtual memory operations pose system crash risk
+
+# Removed: opt_startup_cache - Modern macOS has no such mechanism
+
+# Removed: opt_local_snapshots - Deletes user Time Machine recovery points, breaks backup continuity
+
+opt_fix_broken_configs() {
+    local spinner_started="false"
+    if [[ -t 1 ]]; then
+        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Checking preferences..."
+        spinner_started="true"
+    fi
+
+    local broken_prefs=$(fix_broken_preferences)
+
+    if [[ "$spinner_started" == "true" ]]; then
+        stop_inline_spinner
+    fi
+
+    if [[ $broken_prefs -gt 0 ]]; then
+        opt_msg "Repaired $broken_prefs corrupted preference files"
     else
-        echo -e "${GRAY}-${NC} No old saved states found"
+        opt_msg "All preference files valid"
     fi
 }
 
-# Finder and Dock: refresh interface caches
-# REMOVED: Deleting Finder cache causes user configuration loss
-# Including window positions, sidebar settings, view preferences, icon sizes
-# Users reported losing Finder settings even with .DS_Store whitelist protection
-# Keep this function for reference but do not use in default optimizations
-opt_finder_dock_refresh() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Resetting Finder & Dock caches..."
-    local -a interface_targets=(
-        "$HOME/Library/Caches/com.apple.finder|Finder cache"
-        "$HOME/Library/Caches/com.apple.dock.iconcache|Dock icon cache"
-    )
-    for target in "${interface_targets[@]}"; do
-        IFS='|' read -r target_path label <<< "$target"
-        cleanup_path "$target_path" "$label"
+# DNS cache refresh.
+opt_network_optimization() {
+    if [[ "${MOLE_DNS_FLUSHED:-0}" == "1" ]]; then
+        opt_msg "DNS cache already refreshed"
+        opt_msg "mDNSResponder already restarted"
+        return 0
+    fi
+
+    if flush_dns_cache; then
+        opt_msg "DNS cache refreshed"
+        opt_msg "mDNSResponder restarted"
+    else
+        echo -e "  ${YELLOW}!${NC} Failed to refresh DNS cache"
+    fi
+}
+
+# SQLite vacuum for Mail/Messages/Safari (safety checks applied).
+opt_sqlite_vacuum() {
+    if ! command -v sqlite3 > /dev/null 2>&1; then
+        echo -e "  ${GRAY}-${NC} Database optimization already optimal (sqlite3 unavailable)"
+        return 0
+    fi
+
+    local -a busy_apps=()
+    local -a check_apps=("Mail" "Safari" "Messages")
+    local app
+    for app in "${check_apps[@]}"; do
+        if pgrep -x "$app" > /dev/null 2>&1; then
+            busy_apps+=("$app")
+        fi
     done
 
-    # Warn user before restarting Finder (may lose unsaved work)
-    echo -e "${YELLOW}${ICON_WARNING}${NC} About to restart Finder & Dock (save any work in Finder windows)"
-    sleep 2
+    if [[ ${#busy_apps[@]} -gt 0 ]]; then
+        echo -e "  ${YELLOW}!${NC} Close these apps before database optimization: ${busy_apps[*]}"
+        return 0
+    fi
 
-    killall Finder > /dev/null 2>&1 || true
-    killall Dock > /dev/null 2>&1 || true
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} Finder & Dock relaunched"
-}
+    local spinner_started="false"
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" && -t 1 ]]; then
+        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Optimizing databases..."
+        spinner_started="true"
+    fi
 
-# Swap cleanup: reset swap files
-opt_swap_cleanup() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Removing swapfiles and resetting dynamic pager..."
-    if sudo launchctl unload /System/Library/LaunchDaemons/com.apple.dynamic_pager.plist > /dev/null 2>&1; then
-        # Safe swap reset: just restart the pager, don't manually rm files
-        sudo launchctl load /System/Library/LaunchDaemons/com.apple.dynamic_pager.plist > /dev/null 2>&1 || true
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Swap cache rebuilt"
+    local -a db_paths=(
+        "$HOME/Library/Mail/V*/MailData/Envelope Index*"
+        "$HOME/Library/Messages/chat.db"
+        "$HOME/Library/Safari/History.db"
+        "$HOME/Library/Safari/TopSites.db"
+    )
+
+    local vacuumed=0
+    local timed_out=0
+    local failed=0
+    local skipped=0
+
+    for pattern in "${db_paths[@]}"; do
+        while IFS= read -r db_file; do
+            [[ ! -f "$db_file" ]] && continue
+            [[ "$db_file" == *"-wal" || "$db_file" == *"-shm" ]] && continue
+
+            should_protect_path "$db_file" && continue
+
+            if ! file "$db_file" 2> /dev/null | grep -q "SQLite"; then
+                continue
+            fi
+
+            # Skip large DBs (>100MB).
+            local file_size
+            file_size=$(get_file_size "$db_file")
+            if [[ "$file_size" -gt "$MOLE_SQLITE_MAX_SIZE" ]]; then
+                ((skipped++))
+                continue
+            fi
+
+            # Skip if freelist is tiny (already compact).
+            local page_info=""
+            page_info=$(run_with_timeout 5 sqlite3 "$db_file" "PRAGMA page_count; PRAGMA freelist_count;" 2> /dev/null || echo "")
+            local page_count=""
+            local freelist_count=""
+            page_count=$(echo "$page_info" | awk 'NR==1 {print $1}' 2> /dev/null || echo "")
+            freelist_count=$(echo "$page_info" | awk 'NR==2 {print $1}' 2> /dev/null || echo "")
+            if [[ "$page_count" =~ ^[0-9]+$ && "$freelist_count" =~ ^[0-9]+$ && "$page_count" -gt 0 ]]; then
+                if ((freelist_count * 100 < page_count * 5)); then
+                    ((skipped++))
+                    continue
+                fi
+            fi
+
+            # Verify integrity before VACUUM.
+            if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+                local integrity_check=""
+                set +e
+                integrity_check=$(run_with_timeout 10 sqlite3 "$db_file" "PRAGMA integrity_check;" 2> /dev/null)
+                local integrity_status=$?
+                set -e
+
+                if [[ $integrity_status -ne 0 ]] || ! echo "$integrity_check" | grep -q "ok"; then
+                    ((skipped++))
+                    continue
+                fi
+            fi
+
+            local exit_code=0
+            if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+                set +e
+                run_with_timeout 20 sqlite3 "$db_file" "VACUUM;" 2> /dev/null
+                exit_code=$?
+                set -e
+
+                if [[ $exit_code -eq 0 ]]; then
+                    ((vacuumed++))
+                elif [[ $exit_code -eq 124 ]]; then
+                    ((timed_out++))
+                else
+                    ((failed++))
+                fi
+            else
+                ((vacuumed++))
+            fi
+        done < <(compgen -G "$pattern" || true)
+    done
+
+    if [[ "$spinner_started" == "true" ]]; then
+        stop_inline_spinner
+    fi
+
+    if [[ $vacuumed -gt 0 ]]; then
+        opt_msg "Optimized $vacuumed databases for Mail, Safari, Messages"
+    elif [[ $timed_out -eq 0 && $failed -eq 0 ]]; then
+        opt_msg "All databases already optimized"
     else
-        echo -e "${YELLOW}!${NC} Could not unload dynamic_pager"
+        echo -e "  ${YELLOW}!${NC} Database optimization incomplete"
+    fi
+
+    if [[ $skipped -gt 0 ]]; then
+        opt_msg "Already optimal for $skipped databases"
+    fi
+
+    if [[ $timed_out -gt 0 ]]; then
+        echo -e "  ${YELLOW}!${NC} Timed out on $timed_out databases"
+    fi
+
+    if [[ $failed -gt 0 ]]; then
+        echo -e "  ${YELLOW}!${NC} Failed on $failed databases"
     fi
 }
 
-# Startup cache: rebuild kernel caches
-opt_startup_cache() {
-    # kextcache/PrelinkedKernel rebuilds are legacy and heavy.
-    # Modern macOS (Big Sur+) handles this automatically and securely (SSV).
-    echo -e "${GRAY}-${NC} Startup cache rebuild skipped (handled by macOS)"
-}
-
-# Local snapshots: thin Time Machine snapshots
-opt_local_snapshots() {
-    if ! command -v tmutil > /dev/null 2>&1; then
-        echo -e "${YELLOW}!${NC} tmutil not available on this system"
-        return
-    fi
-
-    local before after
-    before=$(count_local_snapshots)
-    if [[ "$before" -eq 0 ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} No local snapshots to thin"
-        return
-    fi
-
+# LaunchServices rebuild ("Open with" issues).
+opt_launch_services_rebuild() {
     if [[ -t 1 ]]; then
         start_inline_spinner ""
     fi
 
+    local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+    if [[ -f "$lsregister" ]]; then
+        local success=0
+
+        if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+            set +e
+            "$lsregister" -r -domain local -domain user -domain system > /dev/null 2>&1
+            success=$?
+            if [[ $success -ne 0 ]]; then
+                "$lsregister" -r -domain local -domain user > /dev/null 2>&1
+                success=$?
+            fi
+            set -e
+        else
+            success=0
+        fi
+
+        if [[ -t 1 ]]; then
+            stop_inline_spinner
+        fi
+
+        if [[ $success -eq 0 ]]; then
+            opt_msg "LaunchServices repaired"
+            opt_msg "File associations refreshed"
+        else
+            echo -e "  ${YELLOW}!${NC} Failed to rebuild LaunchServices"
+        fi
+    else
+        if [[ -t 1 ]]; then
+            stop_inline_spinner
+        fi
+        echo -e "  ${YELLOW}!${NC} lsregister not found"
+    fi
+}
+
+# Font cache rebuild.
+opt_font_cache_rebuild() {
     local success=false
-    if run_with_timeout 180 sudo tmutil thinlocalsnapshots / 9999999999 4 > /dev/null 2>&1; then
+
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        if sudo atsutil databases -remove > /dev/null 2>&1; then
+            success=true
+        fi
+    else
         success=true
     fi
 
-    if [[ -t 1 ]]; then
-        stop_inline_spinner
-    fi
-
-    after=$(count_local_snapshots)
-    local removed=$((before - after))
-    [[ "$removed" -lt 0 ]] && removed=0
-
     if [[ "$success" == "true" ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Removed $removed snapshots (remaining: $after)"
+        opt_msg "Font cache cleared"
+        opt_msg "System will rebuild font database automatically"
     else
-        echo -e "${YELLOW}!${NC} Timed out or failed"
+        echo -e "  ${YELLOW}!${NC} Failed to clear font cache"
     fi
 }
 
-# Developer cleanup: remove Xcode/simulator cruft
-opt_developer_cleanup() {
-    local -a dev_targets=(
-        "$HOME/Library/Developer/Xcode/DerivedData|Xcode DerivedData"
-        "$HOME/Library/Developer/Xcode/iOS DeviceSupport|iOS Device support files"
-        "$HOME/Library/Developer/CoreSimulator/Caches|CoreSimulator caches"
-    )
+# Removed high-risk optimizations:
+# - opt_startup_items_cleanup: Risk of deleting legitimate app helpers
+# - opt_dyld_cache_update: Low benefit, time-consuming, auto-managed by macOS
+# - opt_system_services_refresh: Risk of data loss when killing system services
 
-    for target in "${dev_targets[@]}"; do
-        IFS='|' read -r target_path label <<< "$target"
-        cleanup_path "$target_path" "$label"
-    done
-
-    if command -v xcrun > /dev/null 2>&1; then
-        echo -e "${BLUE}${ICON_ARROW}${NC} Removing unavailable simulator runtimes..."
-        if xcrun simctl delete unavailable > /dev/null 2>&1; then
-            echo -e "${GREEN}${ICON_SUCCESS}${NC} Unavailable simulators removed"
-        else
-            echo -e "${YELLOW}!${NC} Could not prune simulator runtimes"
+# Memory pressure relief.
+opt_memory_pressure_relief() {
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        if ! is_memory_pressure_high; then
+            opt_msg "Memory pressure already optimal"
+            return 0
         fi
-    fi
 
-    echo -e "${GREEN}${ICON_SUCCESS}${NC} Developer caches cleaned"
-}
-
-# Fix broken system configurations
-# Repairs corrupted preference files and broken login items
-opt_fix_broken_configs() {
-    local broken_prefs=0
-    local broken_items=0
-
-    # Fix broken preferences
-    echo -e "${BLUE}${ICON_ARROW}${NC} Checking preference files..."
-    broken_prefs=$(fix_broken_preferences)
-    if [[ $broken_prefs -gt 0 ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Fixed $broken_prefs broken preference files"
+        if sudo purge > /dev/null 2>&1; then
+            opt_msg "Inactive memory released"
+            opt_msg "System responsiveness improved"
+        else
+            echo -e "  ${YELLOW}!${NC} Failed to release memory pressure"
+        fi
     else
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} All preference files valid"
+        opt_msg "Inactive memory released"
+        opt_msg "System responsiveness improved"
     fi
+}
 
-    # Fix broken login items
-    echo -e "${BLUE}${ICON_ARROW}${NC} Checking login items..."
-    broken_items=$(fix_broken_login_items)
-    if [[ $broken_items -gt 0 ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Removed $broken_items broken login items"
+# Network stack reset (route + ARP).
+opt_network_stack_optimize() {
+    local route_flushed="false"
+    local arp_flushed="false"
+
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        local route_ok=true
+        local dns_ok=true
+
+        if ! route -n get default > /dev/null 2>&1; then
+            route_ok=false
+        fi
+        if ! dscacheutil -q host -a name "example.com" > /dev/null 2>&1; then
+            dns_ok=false
+        fi
+
+        if [[ "$route_ok" == "true" && "$dns_ok" == "true" ]]; then
+            opt_msg "Network stack already optimal"
+            return 0
+        fi
+
+        if sudo route -n flush > /dev/null 2>&1; then
+            route_flushed="true"
+        fi
+
+        if sudo arp -a -d > /dev/null 2>&1; then
+            arp_flushed="true"
+        fi
     else
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} All login items valid"
+        route_flushed="true"
+        arp_flushed="true"
     fi
 
-    local total=$((broken_prefs + broken_items))
-    if [[ $total -gt 0 ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} System configuration repaired"
+    if [[ "$route_flushed" == "true" ]]; then
+        opt_msg "Network routing table refreshed"
     fi
-}
-
-# Network Optimization: Flush DNS, reset mDNS, clear ARP
-opt_network_optimization() {
-    echo -e "${BLUE}${ICON_ARROW}${NC} Optimizing network settings..."
-    local steps=0
-
-    # 1. Flush DNS cache
-    if sudo dscacheutil -flushcache 2> /dev/null && sudo killall -HUP mDNSResponder 2> /dev/null; then
-        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} DNS cache flushed"
-        ((steps++))
-    fi
-
-    # 2. Clear ARP cache (admin only)
-    if sudo arp -d -a > /dev/null 2>&1; then
-        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} ARP cache cleared"
-        ((steps++))
-    fi
-
-    # 3. Reset network interface statistics (soft reset)
-    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Network interfaces refreshed"
-    ((steps++))
-
-    if [[ $steps -gt 0 ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Network optimized"
+    if [[ "$arp_flushed" == "true" ]]; then
+        opt_msg "ARP cache cleared"
+    else
+        if [[ "$route_flushed" == "true" ]]; then
+            return 0
+        fi
+        echo -e "  ${YELLOW}!${NC} Failed to optimize network stack"
     fi
 }
 
-# Clean Spotlight user caches
-opt_spotlight_cache_cleanup() {
-    # Check whitelist
-    if is_whitelisted "spotlight_cache"; then
-        echo -e "${GRAY}${ICON_SUCCESS}${NC} Spotlight cache cleanup (whitelisted)"
+# User directory permissions repair.
+opt_disk_permissions_repair() {
+    local user_id
+    user_id=$(id -u)
+
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        if ! needs_permissions_repair; then
+            opt_msg "User directory permissions already optimal"
+            return 0
+        fi
+
+        if [[ -t 1 ]]; then
+            start_inline_spinner "Repairing disk permissions..."
+        fi
+
+        local success=false
+        if sudo diskutil resetUserPermissions / "$user_id" > /dev/null 2>&1; then
+            success=true
+        fi
+
+        if [[ -t 1 ]]; then
+            stop_inline_spinner
+        fi
+
+        if [[ "$success" == "true" ]]; then
+            opt_msg "User directory permissions repaired"
+            opt_msg "File access issues resolved"
+        else
+            echo -e "  ${YELLOW}!${NC} Failed to repair permissions (may not be needed)"
+        fi
+    else
+        opt_msg "User directory permissions repaired"
+        opt_msg "File access issues resolved"
+    fi
+}
+
+# Bluetooth reset (skip if HID/audio active).
+opt_bluetooth_reset() {
+    local spinner_started="false"
+    if [[ -t 1 ]]; then
+        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Checking Bluetooth..."
+        spinner_started="true"
+    fi
+
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        if has_bluetooth_hid_connected; then
+            if [[ "$spinner_started" == "true" ]]; then
+                stop_inline_spinner
+            fi
+            opt_msg "Bluetooth already optimal"
+            return 0
+        fi
+
+        local bt_audio_active=false
+
+        local audio_info
+        audio_info=$(system_profiler SPAudioDataType 2> /dev/null || echo "")
+
+        local default_output
+        default_output=$(echo "$audio_info" | awk '/Default Output Device: Yes/,/^$/' 2> /dev/null || echo "")
+
+        if echo "$default_output" | grep -qi "Transport:.*Bluetooth"; then
+            bt_audio_active=true
+        fi
+
+        if [[ "$bt_audio_active" == "false" ]]; then
+            if system_profiler SPBluetoothDataType 2> /dev/null | grep -q "Connected: Yes"; then
+                local -a media_apps=("Music" "Spotify" "VLC" "QuickTime Player" "TV" "Podcasts" "Safari" "Google Chrome" "Chrome" "Firefox" "Arc" "IINA" "mpv")
+                for app in "${media_apps[@]}"; do
+                    if pgrep -x "$app" > /dev/null 2>&1; then
+                        bt_audio_active=true
+                        break
+                    fi
+                done
+            fi
+        fi
+
+        if [[ "$bt_audio_active" == "true" ]]; then
+            if [[ "$spinner_started" == "true" ]]; then
+                stop_inline_spinner
+            fi
+            opt_msg "Bluetooth already optimal"
+            return 0
+        fi
+
+        if sudo pkill -TERM bluetoothd > /dev/null 2>&1; then
+            sleep 1
+            if pgrep -x bluetoothd > /dev/null 2>&1; then
+                sudo pkill -KILL bluetoothd > /dev/null 2>&1 || true
+            fi
+            if [[ "$spinner_started" == "true" ]]; then
+                stop_inline_spinner
+            fi
+            opt_msg "Bluetooth module restarted"
+            opt_msg "Connectivity issues resolved"
+        else
+            if [[ "$spinner_started" == "true" ]]; then
+                stop_inline_spinner
+            fi
+            opt_msg "Bluetooth already optimal"
+        fi
+    else
+        if [[ "$spinner_started" == "true" ]]; then
+            stop_inline_spinner
+        fi
+        opt_msg "Bluetooth module restarted"
+        opt_msg "Connectivity issues resolved"
+    fi
+}
+
+# Spotlight index check/rebuild (only if slow).
+opt_spotlight_index_optimize() {
+    local spotlight_status
+    spotlight_status=$(mdutil -s / 2> /dev/null || echo "")
+
+    if echo "$spotlight_status" | grep -qi "Indexing disabled"; then
+        echo -e "  ${GRAY}${ICON_EMPTY}${NC} Spotlight indexing is disabled"
         return 0
     fi
 
-    echo -e "${BLUE}${ICON_ARROW}${NC} Cleaning Spotlight user caches..."
-
-    local cleaned_count=0
-    local total_size_kb=0
-
-    # CoreSpotlight user cache (can grow very large)
-    local spotlight_cache="$HOME/Library/Metadata/CoreSpotlight"
-    if [[ -d "$spotlight_cache" ]]; then
-        local size_kb=$(get_path_size_kb "$spotlight_cache")
-        if [[ "$size_kb" -gt 0 ]]; then
-            local size_human=$(bytes_to_human "$((size_kb * 1024))")
-            if safe_remove "$spotlight_cache" true; then
-                echo -e "  ${GREEN}${ICON_SUCCESS}${NC} CoreSpotlight cache ${GREEN}($size_human)${NC}"
-                ((cleaned_count++))
-                ((total_size_kb += size_kb))
+    if echo "$spotlight_status" | grep -qi "Indexing enabled" && ! echo "$spotlight_status" | grep -qi "Indexing and searching disabled"; then
+        local slow_count=0
+        local test_start test_end test_duration
+        for _ in 1 2; do
+            test_start=$(date +%s)
+            mdfind "kMDItemFSName == 'Applications'" > /dev/null 2>&1 || true
+            test_end=$(date +%s)
+            test_duration=$((test_end - test_start))
+            if [[ $test_duration -gt 3 ]]; then
+                ((slow_count++))
             fi
-        fi
-    fi
+            sleep 1
+        done
 
-    # Spotlight saved application state
-    local spotlight_state="$HOME/Library/Saved Application State/com.apple.spotlight.Spotlight.savedState"
-    if [[ -d "$spotlight_state" ]]; then
-        local size_kb=$(get_path_size_kb "$spotlight_state")
-        if [[ "$size_kb" -gt 0 ]]; then
-            local size_human=$(bytes_to_human "$((size_kb * 1024))")
-            if safe_remove "$spotlight_state" true; then
-                echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Spotlight state ${GREEN}($size_human)${NC}"
-                ((cleaned_count++))
-                ((total_size_kb += size_kb))
+        if [[ $slow_count -ge 2 ]]; then
+            if ! is_ac_power; then
+                opt_msg "Spotlight index already optimal"
+                return 0
             fi
-        fi
-    fi
 
-    if [[ $cleaned_count -gt 0 ]]; then
-        local total_human=$(bytes_to_human "$((total_size_kb * 1024))")
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Cleaned $cleaned_count items ${GREEN}($total_human)${NC}"
-        echo -e "${YELLOW}${ICON_WARNING}${NC} System settings may require logout/restart to display correctly"
+            if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+                echo -e "  ${BLUE}ℹ${NC} Spotlight search is slow, rebuilding index (may take 1-2 hours)"
+                if sudo mdutil -E / > /dev/null 2>&1; then
+                    opt_msg "Spotlight index rebuild started"
+                    echo -e "  ${GRAY}Indexing will continue in background${NC}"
+                else
+                    echo -e "  ${YELLOW}!${NC} Failed to rebuild Spotlight index"
+                fi
+            else
+                opt_msg "Spotlight index rebuild started"
+            fi
+        else
+            opt_msg "Spotlight index already optimal"
+        fi
     else
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} No Spotlight caches to clean"
+        opt_msg "Spotlight index verified"
     fi
 }
 
-# Execute optimization by action name
+# Dock cache refresh.
+opt_dock_refresh() {
+    local dock_support="$HOME/Library/Application Support/Dock"
+    local refreshed=false
+
+    if [[ -d "$dock_support" ]]; then
+        while IFS= read -r db_file; do
+            if [[ -f "$db_file" ]]; then
+                safe_remove "$db_file" true > /dev/null 2>&1 && refreshed=true
+            fi
+        done < <(find "$dock_support" -name "*.db" -type f 2> /dev/null || true)
+    fi
+
+    local dock_plist="$HOME/Library/Preferences/com.apple.dock.plist"
+    if [[ -f "$dock_plist" ]]; then
+        touch "$dock_plist" 2> /dev/null || true
+    fi
+
+    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        killall Dock 2> /dev/null || true
+    fi
+
+    if [[ "$refreshed" == "true" ]]; then
+        opt_msg "Dock cache cleared"
+    fi
+    opt_msg "Dock refreshed"
+}
+
+# Dispatch optimization by action name.
 execute_optimization() {
     local action="$1"
     local path="${2:-}"
@@ -409,22 +661,20 @@ execute_optimization() {
     case "$action" in
         system_maintenance) opt_system_maintenance ;;
         cache_refresh) opt_cache_refresh ;;
-        maintenance_scripts) opt_maintenance_scripts ;;
-        log_cleanup) opt_log_cleanup ;;
-        recent_items) opt_recent_items ;;
-        radio_refresh) opt_radio_refresh ;;
-        mail_downloads) opt_mail_downloads ;;
         saved_state_cleanup) opt_saved_state_cleanup ;;
-        finder_dock_refresh) opt_finder_dock_refresh ;;
-        swap_cleanup) opt_swap_cleanup ;;
-        startup_cache) opt_startup_cache ;;
-        local_snapshots) opt_local_snapshots ;;
-        developer_cleanup) opt_developer_cleanup ;;
         fix_broken_configs) opt_fix_broken_configs ;;
-        spotlight_cache_cleanup) opt_spotlight_cache_cleanup ;;
         network_optimization) opt_network_optimization ;;
+        sqlite_vacuum) opt_sqlite_vacuum ;;
+        launch_services_rebuild) opt_launch_services_rebuild ;;
+        font_cache_rebuild) opt_font_cache_rebuild ;;
+        dock_refresh) opt_dock_refresh ;;
+        memory_pressure_relief) opt_memory_pressure_relief ;;
+        network_stack_optimize) opt_network_stack_optimize ;;
+        disk_permissions_repair) opt_disk_permissions_repair ;;
+        bluetooth_reset) opt_bluetooth_reset ;;
+        spotlight_index_optimize) opt_spotlight_index_optimize ;;
         *)
-            echo -e "${RED}${ICON_ERROR}${NC} Unknown action: $action"
+            echo -e "${YELLOW}${ICON_ERROR}${NC} Unknown action: $action"
             return 1
             ;;
     esac

@@ -18,7 +18,7 @@ func displayPath(path string) string {
 	return path
 }
 
-// truncateMiddle truncates string in the middle, keeping head and tail.
+// truncateMiddle trims the middle, keeping head and tail.
 func truncateMiddle(s string, maxWidth int) string {
 	runes := []rune(s)
 	currentWidth := displayWidth(s)
@@ -27,9 +27,7 @@ func truncateMiddle(s string, maxWidth int) string {
 		return s
 	}
 
-	// Reserve 3 width for "..."
 	if maxWidth < 10 {
-		// Simple truncation for very small width
 		width := 0
 		for i, r := range runes {
 			width += runeWidth(r)
@@ -40,11 +38,9 @@ func truncateMiddle(s string, maxWidth int) string {
 		return s
 	}
 
-	// Keep more of the tail (filename usually more important)
 	targetHeadWidth := (maxWidth - 3) / 3
 	targetTailWidth := maxWidth - 3 - targetHeadWidth
 
-	// Find head cutoff point based on display width
 	headWidth := 0
 	headIdx := 0
 	for i, r := range runes {
@@ -56,7 +52,6 @@ func truncateMiddle(s string, maxWidth int) string {
 		headIdx = i + 1
 	}
 
-	// Find tail cutoff point
 	tailWidth := 0
 	tailIdx := len(runes)
 	for i := len(runes) - 1; i >= 0; i-- {
@@ -108,7 +103,6 @@ func coloredProgressBar(value, max int64, percent float64) string {
 		filled = barWidth
 	}
 
-	// Choose color based on percentage
 	var barColor string
 	if percent >= 50 {
 		barColor = colorRed
@@ -142,12 +136,24 @@ func coloredProgressBar(value, max int64, percent float64) string {
 	return bar + colorReset
 }
 
-// Calculate display width considering CJK characters.
+// runeWidth returns display width for wide characters and emoji.
 func runeWidth(r rune) int {
-	if r >= 0x4E00 && r <= 0x9FFF ||
-		r >= 0x3400 && r <= 0x4DBF ||
-		r >= 0xAC00 && r <= 0xD7AF ||
-		r >= 0xFF00 && r <= 0xFFEF {
+	if r >= 0x4E00 && r <= 0x9FFF || // CJK Unified Ideographs
+		r >= 0x3400 && r <= 0x4DBF || // CJK Extension A
+		r >= 0x20000 && r <= 0x2A6DF || // CJK Extension B
+		r >= 0x2A700 && r <= 0x2B73F || // CJK Extension C
+		r >= 0x2B740 && r <= 0x2B81F || // CJK Extension D
+		r >= 0x2B820 && r <= 0x2CEAF || // CJK Extension E
+		r >= 0x3040 && r <= 0x30FF || // Hiragana and Katakana
+		r >= 0x31F0 && r <= 0x31FF || // Katakana Phonetic Extensions
+		r >= 0xAC00 && r <= 0xD7AF || // Hangul Syllables
+		r >= 0xFF00 && r <= 0xFFEF || // Fullwidth Forms
+		r >= 0x1F300 && r <= 0x1F6FF || // Miscellaneous Symbols and Pictographs (includes Transport)
+		r >= 0x1F900 && r <= 0x1F9FF || // Supplemental Symbols and Pictographs
+		r >= 0x2600 && r <= 0x26FF || // Miscellaneous Symbols
+		r >= 0x2700 && r <= 0x27BF || // Dingbats
+		r >= 0xFE10 && r <= 0xFE1F || // Vertical Forms
+		r >= 0x1F000 && r <= 0x1F02F { // Mahjong Tiles
 		return 2
 	}
 	return 1
@@ -161,9 +167,26 @@ func displayWidth(s string) int {
 	return width
 }
 
+// calculateNameWidth computes name column width from terminal width.
+func calculateNameWidth(termWidth int) int {
+	const fixedWidth = 61
+	available := termWidth - fixedWidth
+
+	if available < 24 {
+		return 24
+	}
+	if available > 60 {
+		return 60
+	}
+	return available
+}
+
 func trimName(name string) string {
+	return trimNameWithWidth(name, 45) // Default width for backward compatibility
+}
+
+func trimNameWithWidth(name string, maxWidth int) string {
 	const (
-		maxWidth      = 28
 		ellipsis      = "..."
 		ellipsisWidth = 3
 	)
@@ -202,7 +225,7 @@ func padName(name string, targetWidth int) string {
 	return name + strings.Repeat(" ", targetWidth-currentWidth)
 }
 
-// formatUnusedTime formats the time since last access in a compact way.
+// formatUnusedTime formats time since last access.
 func formatUnusedTime(lastAccess time.Time) string {
 	if lastAccess.IsZero() {
 		return ""

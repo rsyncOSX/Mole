@@ -43,6 +43,7 @@ temp/
 # AI Assistant Instructions
 .claude/
 .gemini/
+.kiro/
 CLAUDE.md
 GEMINI.md
 .cursorrules
@@ -51,8 +52,11 @@ GEMINI.md
 cmd/analyze/analyze
 cmd/status/status
 /status
+/analyze
 mole-analyze
 # Note: bin/analyze-go and bin/status-go are released binaries and should be tracked
+bin/analyze-darwin-*
+bin/status-darwin-*
 
 # Swift / Xcode
 .build/

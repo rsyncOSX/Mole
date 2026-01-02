@@ -1,49 +1,36 @@
 #!/bin/bash
-# System-Level Cleanup Module
-# Deep system cleanup (requires sudo) and Time Machine failed backups
-
+# System-Level Cleanup Module (requires sudo).
 set -euo pipefail
-
-# Deep system cleanup (requires sudo)
+# System caches, logs, and temp files.
 clean_deep_system() {
-    # Clean old system caches
-    safe_sudo_find_delete "/Library/Caches" "*.cache" "$MOLE_TEMP_FILE_AGE_DAYS" "f" || true
-    safe_sudo_find_delete "/Library/Caches" "*.tmp" "$MOLE_TEMP_FILE_AGE_DAYS" "f" || true
-    safe_sudo_find_delete "/Library/Caches" "*.log" "$MOLE_LOG_AGE_DAYS" "f" || true
-
-    # Clean temp files - use real paths (macOS /tmp is symlink to /private/tmp)
+    stop_section_spinner
+    local cache_cleaned=0
+    safe_sudo_find_delete "/Library/Caches" "*.cache" "$MOLE_TEMP_FILE_AGE_DAYS" "f" && cache_cleaned=1 || true
+    safe_sudo_find_delete "/Library/Caches" "*.tmp" "$MOLE_TEMP_FILE_AGE_DAYS" "f" && cache_cleaned=1 || true
+    safe_sudo_find_delete "/Library/Caches" "*.log" "$MOLE_LOG_AGE_DAYS" "f" && cache_cleaned=1 || true
+    [[ $cache_cleaned -eq 1 ]] && log_success "System caches"
     local tmp_cleaned=0
     safe_sudo_find_delete "/private/tmp" "*" "${MOLE_TEMP_FILE_AGE_DAYS}" "f" && tmp_cleaned=1 || true
     safe_sudo_find_delete "/private/var/tmp" "*" "${MOLE_TEMP_FILE_AGE_DAYS}" "f" && tmp_cleaned=1 || true
     [[ $tmp_cleaned -eq 1 ]] && log_success "System temp files"
-
-    # Clean crash reports
     safe_sudo_find_delete "/Library/Logs/DiagnosticReports" "*" "$MOLE_CRASH_REPORT_AGE_DAYS" "f" || true
     log_success "System crash reports"
-
-    # Clean system logs - use real path (macOS /var is symlink to /private/var)
     safe_sudo_find_delete "/private/var/log" "*.log" "$MOLE_LOG_AGE_DAYS" "f" || true
     safe_sudo_find_delete "/private/var/log" "*.gz" "$MOLE_LOG_AGE_DAYS" "f" || true
     log_success "System logs"
-
-    # Clean Library Updates safely - skip if SIP is enabled to avoid error messages
-    # SIP-protected files in /Library/Updates cannot be deleted even with sudo
     if [[ -d "/Library/Updates" && ! -L "/Library/Updates" ]]; then
-        if is_sip_enabled; then
-            # SIP is enabled, skip /Library/Updates entirely to avoid error messages
-            # These files are system-protected and cannot be removed
-            : # No-op, silently skip
-        else
-            # SIP is disabled, attempt cleanup with restricted flag check
+        if ! is_sip_enabled; then
             local updates_cleaned=0
             while IFS= read -r -d '' item; do
-                # Skip system-protected files (restricted flag)
+                if [[ -z "$item" ]] || [[ ! "$item" =~ ^/Library/Updates/[^/]+$ ]]; then
+                    debug_log "Skipping malformed path: $item"
+                    continue
+                fi
                 local item_flags
-                item_flags=$(command stat -f%Sf "$item" 2> /dev/null || echo "")
+                item_flags=$($STAT_BSD -f%Sf "$item" 2> /dev/null || echo "")
                 if [[ "$item_flags" == *"restricted"* ]]; then
                     continue
                 fi
-
                 if safe_sudo_remove "$item"; then
                     ((updates_cleaned++))
                 fi
@@ -51,21 +38,15 @@ clean_deep_system() {
             [[ $updates_cleaned -gt 0 ]] && log_success "System library updates"
         fi
     fi
-
-    # Clean macOS Install Data (system upgrade leftovers)
-    # Only remove if older than 30 days to ensure system stability
     if [[ -d "/macOS Install Data" ]]; then
         local mtime=$(get_file_mtime "/macOS Install Data")
         local age_days=$((($(date +%s) - mtime) / 86400))
-
         debug_log "Found macOS Install Data (age: ${age_days} days)"
-
         if [[ $age_days -ge 30 ]]; then
             local size_kb=$(get_path_size_kb "/macOS Install Data")
             if [[ -n "$size_kb" && "$size_kb" -gt 0 ]]; then
                 local size_human=$(bytes_to_human "$((size_kb * 1024))")
                 debug_log "Cleaning macOS Install Data: $size_human (${age_days} days old)"
-
                 if safe_sudo_remove "/macOS Install Data"; then
                     log_success "macOS Install Data ($size_human)"
                 fi
@@ -74,172 +55,175 @@ clean_deep_system() {
             debug_log "Keeping macOS Install Data (only ${age_days} days old, needs 30+)"
         fi
     fi
-
-    # Clean browser code signature caches
-    # These are regenerated automatically when needed
-    if [[ -t 1 ]]; then
-        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Scanning system caches..."
-    fi
+    start_section_spinner "Scanning system caches..."
     local code_sign_cleaned=0
+    local found_count=0
+    local last_update_time=$(date +%s)
+    local update_interval=2
     while IFS= read -r -d '' cache_dir; do
-        debug_log "Found code sign cache: $cache_dir"
         if safe_remove "$cache_dir" true; then
             ((code_sign_cleaned++))
         fi
-    done < <(find /private/var/folders -type d -name "*.code_sign_clone" -path "*/X/*" -print0 2> /dev/null || true)
-
-    if [[ -t 1 ]]; then stop_inline_spinner; fi
-
+        ((found_count++))
+        local current_time=$(date +%s)
+        if [[ $((current_time - last_update_time)) -ge $update_interval ]]; then
+            start_section_spinner "Scanning system caches... ($found_count found)"
+            last_update_time=$current_time
+        fi
+    done < <(run_with_timeout 5 command find /private/var/folders -type d -name "*.code_sign_clone" -path "*/X/*" -print0 2> /dev/null || true)
+    stop_section_spinner
     [[ $code_sign_cleaned -gt 0 ]] && log_success "Browser code signature caches ($code_sign_cleaned items)"
-
-    # Clean system diagnostics logs
     safe_sudo_find_delete "/private/var/db/diagnostics/Special" "*" "$MOLE_LOG_AGE_DAYS" "f" || true
     safe_sudo_find_delete "/private/var/db/diagnostics/Persist" "*" "$MOLE_LOG_AGE_DAYS" "f" || true
     safe_sudo_find_delete "/private/var/db/DiagnosticPipeline" "*" "$MOLE_LOG_AGE_DAYS" "f" || true
     log_success "System diagnostic logs"
-
-    # Clean power logs
     safe_sudo_find_delete "/private/var/db/powerlog" "*" "$MOLE_LOG_AGE_DAYS" "f" || true
     log_success "Power logs"
+    safe_sudo_find_delete "/private/var/db/reportmemoryexception/MemoryLimitViolations" "*" "30" "f" || true
+    log_success "Memory exception reports"
+    start_section_spinner "Cleaning diagnostic trace logs..."
+    local diag_logs_cleaned=0
+    safe_sudo_find_delete "/private/var/db/diagnostics/Persist" "*.tracev3" "30" "f" && diag_logs_cleaned=1 || true
+    safe_sudo_find_delete "/private/var/db/diagnostics/Special" "*.tracev3" "30" "f" && diag_logs_cleaned=1 || true
+    stop_section_spinner
+    [[ $diag_logs_cleaned -eq 1 ]] && log_success "System diagnostic trace logs"
 }
-
-# Clean Time Machine failed backups
+# Incomplete Time Machine backups.
 clean_time_machine_failed_backups() {
     local tm_cleaned=0
-
-    # Check if Time Machine is configured
-    if command -v tmutil > /dev/null 2>&1; then
-        if tmutil destinationinfo 2>&1 | grep -q "No destinations configured"; then
-            echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No failed Time Machine backups found"
-            return 0
-        fi
-    fi
-
-    if [[ ! -d "/Volumes" ]]; then
-        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No failed Time Machine backups found"
+    if ! command -v tmutil > /dev/null 2>&1; then
+        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No incomplete backups found"
         return 0
     fi
-
-    # Skip if backup is running
-    if pgrep -x "backupd" > /dev/null 2>&1; then
+    start_section_spinner "Checking Time Machine configuration..."
+    local spinner_active=true
+    local tm_info
+    tm_info=$(run_with_timeout 2 tmutil destinationinfo 2>&1 || echo "failed")
+    if [[ "$tm_info" == *"No destinations configured"* || "$tm_info" == "failed" ]]; then
+        if [[ "$spinner_active" == "true" ]]; then
+            stop_section_spinner
+        fi
+        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No incomplete backups found"
+        return 0
+    fi
+    if [[ ! -d "/Volumes" ]]; then
+        if [[ "$spinner_active" == "true" ]]; then
+            stop_section_spinner
+        fi
+        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No incomplete backups found"
+        return 0
+    fi
+    if tmutil status 2> /dev/null | grep -q "Running = 1"; then
+        if [[ "$spinner_active" == "true" ]]; then
+            stop_section_spinner
+        fi
         echo -e "  ${YELLOW}!${NC} Time Machine backup in progress, skipping cleanup"
         return 0
     fi
-
+    if [[ "$spinner_active" == "true" ]]; then
+        start_section_spinner "Checking backup volumes..."
+    fi
+    # Fast pre-scan for backup volumes to avoid slow tmutil checks.
+    local -a backup_volumes=()
     for volume in /Volumes/*; do
         [[ -d "$volume" ]] || continue
-
-        # Skip system and network volumes
         [[ "$volume" == "/Volumes/MacintoshHD" || "$volume" == "/" ]] && continue
-
-        if [[ -t 1 ]]; then
-            MOLE_SPINNER_PREFIX="  " start_inline_spinner "Scanning backup volumes..."
-        fi
-
-        # Skip if volume is a symlink (security check)
         [[ -L "$volume" ]] && continue
-
-        # Check if this is a Time Machine destination
-        if command -v tmutil > /dev/null 2>&1; then
-            if ! tmutil destinationinfo 2> /dev/null | grep -q "$(basename "$volume")"; then
-                continue
-            fi
+        if [[ -d "$volume/Backups.backupdb" ]] || [[ -d "$volume/.MobileBackups" ]]; then
+            backup_volumes+=("$volume")
         fi
-
-        local fs_type=$(command df -T "$volume" 2> /dev/null | tail -1 | awk '{print $2}')
+    done
+    if [[ ${#backup_volumes[@]} -eq 0 ]]; then
+        if [[ "$spinner_active" == "true" ]]; then
+            stop_section_spinner
+        fi
+        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No incomplete backups found"
+        return 0
+    fi
+    if [[ "$spinner_active" == "true" ]]; then
+        start_section_spinner "Scanning backup volumes..."
+    fi
+    for volume in "${backup_volumes[@]}"; do
+        local fs_type
+        fs_type=$(run_with_timeout 1 command df -T "$volume" 2> /dev/null | tail -1 | awk '{print $2}' || echo "unknown")
         case "$fs_type" in
-            nfs | smbfs | afpfs | cifs | webdav) continue ;;
+            nfs | smbfs | afpfs | cifs | webdav | unknown) continue ;;
         esac
-
-        # HFS+ style backups (Backups.backupdb)
         local backupdb_dir="$volume/Backups.backupdb"
         if [[ -d "$backupdb_dir" ]]; then
             while IFS= read -r inprogress_file; do
                 [[ -d "$inprogress_file" ]] || continue
-
-                # Only delete old failed backups (safety window)
+                # Only delete old incomplete backups (safety window).
                 local file_mtime=$(get_file_mtime "$inprogress_file")
                 local current_time=$(date +%s)
                 local hours_old=$(((current_time - file_mtime) / 3600))
-
                 if [[ $hours_old -lt $MOLE_TM_BACKUP_SAFE_HOURS ]]; then
                     continue
                 fi
-
                 local size_kb=$(get_path_size_kb "$inprogress_file")
                 [[ "$size_kb" -le 0 ]] && continue
-
+                if [[ "$spinner_active" == "true" ]]; then
+                    stop_section_spinner
+                    spinner_active=false
+                fi
                 local backup_name=$(basename "$inprogress_file")
                 local size_human=$(bytes_to_human "$((size_kb * 1024))")
-
                 if [[ "$DRY_RUN" == "true" ]]; then
-                    echo -e "  ${YELLOW}→${NC} Failed backup: $backup_name ${YELLOW}($size_human dry)${NC}"
+                    echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Incomplete backup: $backup_name ${YELLOW}($size_human dry)${NC}"
                     ((tm_cleaned++))
                     note_activity
                     continue
                 fi
-
-                # Real deletion
                 if ! command -v tmutil > /dev/null 2>&1; then
                     echo -e "  ${YELLOW}!${NC} tmutil not available, skipping: $backup_name"
                     continue
                 fi
-
                 if tmutil delete "$inprogress_file" 2> /dev/null; then
-                    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Failed backup: $backup_name ${GREEN}($size_human)${NC}"
+                    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Incomplete backup: $backup_name ${GREEN}($size_human)${NC}"
                     ((tm_cleaned++))
                     ((files_cleaned++))
                     ((total_size_cleaned += size_kb))
                     ((total_items++))
                     note_activity
                 else
-                    echo -e "  ${YELLOW}!${NC} Could not delete: $backup_name (try manually with sudo)"
+                    echo -e "  ${YELLOW}!${NC} Could not delete: $backup_name · try manually with sudo"
                 fi
             done < <(run_with_timeout 15 find "$backupdb_dir" -maxdepth 3 -type d \( -name "*.inProgress" -o -name "*.inprogress" \) 2> /dev/null || true)
         fi
-
-        # APFS style backups (.backupbundle or .sparsebundle)
+        # APFS bundles.
         for bundle in "$volume"/*.backupbundle "$volume"/*.sparsebundle; do
             [[ -e "$bundle" ]] || continue
             [[ -d "$bundle" ]] || continue
-
-            # Check if bundle is mounted
             local bundle_name=$(basename "$bundle")
             local mounted_path=$(hdiutil info 2> /dev/null | grep -A 5 "image-path.*$bundle_name" | grep "/Volumes/" | awk '{print $1}' | head -1 || echo "")
-
             if [[ -n "$mounted_path" && -d "$mounted_path" ]]; then
                 while IFS= read -r inprogress_file; do
                     [[ -d "$inprogress_file" ]] || continue
-
-                    # Only delete old failed backups (safety window)
                     local file_mtime=$(get_file_mtime "$inprogress_file")
                     local current_time=$(date +%s)
                     local hours_old=$(((current_time - file_mtime) / 3600))
-
                     if [[ $hours_old -lt $MOLE_TM_BACKUP_SAFE_HOURS ]]; then
                         continue
                     fi
-
                     local size_kb=$(get_path_size_kb "$inprogress_file")
                     [[ "$size_kb" -le 0 ]] && continue
-
+                    if [[ "$spinner_active" == "true" ]]; then
+                        stop_section_spinner
+                        spinner_active=false
+                    fi
                     local backup_name=$(basename "$inprogress_file")
                     local size_human=$(bytes_to_human "$((size_kb * 1024))")
-
                     if [[ "$DRY_RUN" == "true" ]]; then
-                        echo -e "  ${YELLOW}→${NC} Failed APFS backup in $bundle_name: $backup_name ${YELLOW}($size_human dry)${NC}"
+                        echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Incomplete APFS backup in $bundle_name: $backup_name ${YELLOW}($size_human dry)${NC}"
                         ((tm_cleaned++))
                         note_activity
                         continue
                     fi
-
-                    # Real deletion
                     if ! command -v tmutil > /dev/null 2>&1; then
                         continue
                     fi
-
                     if tmutil delete "$inprogress_file" 2> /dev/null; then
-                        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Failed APFS backup in $bundle_name: $backup_name ${GREEN}($size_human)${NC}"
+                        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Incomplete APFS backup in $bundle_name: $backup_name ${GREEN}($size_human)${NC}"
                         ((tm_cleaned++))
                         ((files_cleaned++))
                         ((total_size_cleaned += size_kb))
@@ -251,61 +235,86 @@ clean_time_machine_failed_backups() {
                 done < <(run_with_timeout 15 find "$mounted_path" -maxdepth 3 -type d \( -name "*.inProgress" -o -name "*.inprogress" \) 2> /dev/null || true)
             fi
         done
-        if [[ -t 1 ]]; then stop_inline_spinner; fi
     done
-
+    if [[ "$spinner_active" == "true" ]]; then
+        stop_section_spinner
+    fi
     if [[ $tm_cleaned -eq 0 ]]; then
-        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No failed Time Machine backups found"
+        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} No incomplete backups found"
     fi
 }
-
-# Clean local APFS snapshots (older than 24h)
+# Local APFS snapshots (keep the most recent).
 clean_local_snapshots() {
-    # Check if tmutil is available
     if ! command -v tmutil > /dev/null 2>&1; then
         return 0
     fi
-
-    if [[ -t 1 ]]; then
-        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Checking local snapshots..."
-    fi
-
-    # Check for local snapshots
+    start_section_spinner "Checking local snapshots..."
     local snapshot_list
     snapshot_list=$(tmutil listlocalsnapshots / 2> /dev/null)
-
-    if [[ -t 1 ]]; then stop_inline_spinner; fi
-
+    stop_section_spinner
     [[ -z "$snapshot_list" ]] && return 0
-
-    # Parse and clean snapshots
     local cleaned_count=0
     local total_cleaned_size=0 # Estimation not possible without thin
-
-    # Get current time
-    local current_ts=$(date +%s)
-    local one_day_ago=$((current_ts - 86400))
-
+    local newest_ts=0
+    local newest_name=""
+    local -a snapshots=()
     while IFS= read -r line; do
-        # Format: com.apple.TimeMachine.2023-10-25-120000
         if [[ "$line" =~ com\.apple\.TimeMachine\.([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{6}) ]]; then
+            local snap_name="${BASH_REMATCH[0]}"
+            snapshots+=("$snap_name")
             local date_str="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]:0:2}:${BASH_REMATCH[4]:2:2}:${BASH_REMATCH[4]:4:2}"
             local snap_ts=$(date -j -f "%Y-%m-%d %H:%M:%S" "$date_str" "+%s" 2> /dev/null || echo "0")
-
-            # Skip if parsing failed
             [[ "$snap_ts" == "0" ]] && continue
+            if [[ "$snap_ts" -gt "$newest_ts" ]]; then
+                newest_ts="$snap_ts"
+                newest_name="$snap_name"
+            fi
+        fi
+    done <<< "$snapshot_list"
 
-            # If snapshot is older than 24 hours
-            if [[ $snap_ts -lt $one_day_ago ]]; then
-                local snap_name="${BASH_REMATCH[0]}"
+    [[ ${#snapshots[@]} -eq 0 ]] && return 0
+    [[ -z "$newest_name" ]] && return 0
 
+    local deletable_count=$((${#snapshots[@]} - 1))
+    [[ $deletable_count -le 0 ]] && return 0
+
+    if [[ "$DRY_RUN" != "true" ]]; then
+        if [[ ! -t 0 ]]; then
+            echo -e "  ${YELLOW}!${NC} ${#snapshots[@]} local snapshot(s) found, skipping non-interactive mode"
+            echo -e "  ${YELLOW}${ICON_WARNING}${NC} ${GRAY}Tip: Snapshots may cause Disk Utility to show different 'Available' values${NC}"
+            return 0
+        fi
+        echo -e "  ${YELLOW}!${NC} Time Machine local snapshots found"
+        echo -e "  ${GRAY}macOS can recreate them if needed.${NC}"
+        echo -e "  ${GRAY}The most recent snapshot will be kept.${NC}"
+        echo -ne "  ${PURPLE}${ICON_ARROW}${NC} Remove all local snapshots except the most recent one? ${GREEN}Enter${NC} continue, ${GRAY}Space${NC} skip: "
+        local choice
+        if type read_key > /dev/null 2>&1; then
+            choice=$(read_key)
+        else
+            IFS= read -r -s -n 1 choice || choice=""
+            if [[ -z "$choice" || "$choice" == $'\n' || "$choice" == $'\r' ]]; then
+                choice="ENTER"
+            fi
+        fi
+        if [[ "$choice" == "ENTER" ]]; then
+            printf "\r\033[K" # Clear the prompt line
+        else
+            echo -e " ${GRAY}Skipped${NC}"
+            return 0
+        fi
+    fi
+
+    local snap_name
+    for snap_name in "${snapshots[@]}"; do
+        if [[ "$snap_name" =~ com\.apple\.TimeMachine\.([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{6}) ]]; then
+            if [[ "${BASH_REMATCH[0]}" != "$newest_name" ]]; then
                 if [[ "$DRY_RUN" == "true" ]]; then
-                    echo -e "  ${YELLOW}→${NC} Old local snapshot: $snap_name ${YELLOW}(dry)${NC}"
+                    echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Local snapshot: $snap_name ${YELLOW}dry-run${NC}"
                     ((cleaned_count++))
                     note_activity
                 else
-                    # Secure removal
-                    if safe_sudo tmutil deletelocalsnapshots "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}-${BASH_REMATCH[4]}" > /dev/null 2>&1; then
+                    if sudo tmutil deletelocalsnapshots "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}-${BASH_REMATCH[4]}" > /dev/null 2>&1; then
                         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Removed snapshot: $snap_name"
                         ((cleaned_count++))
                         note_activity
@@ -315,9 +324,8 @@ clean_local_snapshots() {
                 fi
             fi
         fi
-    done <<< "$snapshot_list"
-
+    done
     if [[ $cleaned_count -gt 0 && "$DRY_RUN" != "true" ]]; then
-        log_success "Cleaned $cleaned_count old local snapshots"
+        log_success "Cleaned $cleaned_count local snapshots, kept latest"
     fi
 }

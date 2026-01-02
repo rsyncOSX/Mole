@@ -10,9 +10,13 @@ show_suggestions() {
     local can_auto_fix=false
     local -a auto_fix_items=()
     local -a manual_items=()
+    local skip_security_autofix=false
+    if [[ "${MOLE_SECURITY_FIXES_SHOWN:-}" == "true" ]]; then
+        skip_security_autofix=true
+    fi
 
     # Security suggestions
-    if [[ -n "${FIREWALL_DISABLED:-}" && "${FIREWALL_DISABLED}" == "true" ]]; then
+    if [[ "$skip_security_autofix" == "false" && -n "${FIREWALL_DISABLED:-}" && "${FIREWALL_DISABLED}" == "true" ]]; then
         auto_fix_items+=("Enable Firewall for better security")
         has_suggestions=true
         can_auto_fix=true
@@ -24,7 +28,7 @@ show_suggestions() {
     fi
 
     # Configuration suggestions
-    if [[ -n "${TOUCHID_NOT_CONFIGURED:-}" && "${TOUCHID_NOT_CONFIGURED}" == "true" ]]; then
+    if [[ "$skip_security_autofix" == "false" && -n "${TOUCHID_NOT_CONFIGURED:-}" && "${TOUCHID_NOT_CONFIGURED}" == "true" ]]; then
         auto_fix_items+=("Enable Touch ID for sudo")
         has_suggestions=true
         can_auto_fix=true
@@ -94,7 +98,7 @@ ask_for_auto_fix() {
         return 1
     fi
 
-    echo -ne "${PURPLE}${ICON_ARROW}${NC} Auto-fix issues now? ${GRAY}Enter confirm / ESC cancel${NC}: "
+    echo -ne "${PURPLE}${ICON_ARROW}${NC} Auto-fix issues now? ${GRAY}Enter confirm / Space cancel${NC}: "
 
     local key
     if ! key=$(read_key); then
@@ -132,7 +136,7 @@ perform_auto_fix() {
     # Fix Firewall
     if [[ -n "${FIREWALL_DISABLED:-}" && "${FIREWALL_DISABLED}" == "true" ]]; then
         echo -e "${BLUE}Enabling Firewall...${NC}"
-        if sudo defaults write /Library/Preferences/com.apple.alf globalstate -int 1 2> /dev/null; then
+        if sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on > /dev/null 2>&1; then
             echo -e "${GREEN}✓${NC} Firewall enabled"
             ((fixed_count++))
             fixed_items+=("Firewall enabled")

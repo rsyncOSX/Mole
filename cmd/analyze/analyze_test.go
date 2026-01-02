@@ -75,11 +75,6 @@ func TestScanPathConcurrentBasic(t *testing.T) {
 	if bytes := atomic.LoadInt64(&bytesScanned); bytes == 0 {
 		t.Fatalf("expected byte counter to increase")
 	}
-	// current path update is throttled, so it might be empty for small scans
-	// if current == "" {
-	// 	t.Fatalf("expected current path to be updated")
-	// }
-
 	foundSymlink := false
 	for _, entry := range result.Entries {
 		if strings.HasSuffix(entry.Name, " →") {
@@ -148,7 +143,7 @@ func TestOverviewStoreAndLoad(t *testing.T) {
 		t.Fatalf("snapshot mismatch: want %d, got %d", want, got)
 	}
 
-	// Force reload from disk and ensure value persists.
+	// Reload from disk and ensure value persists.
 	resetOverviewSnapshotForTest()
 	got, err = loadStoredOverviewSize(path)
 	if err != nil {
@@ -220,7 +215,7 @@ func TestMeasureOverviewSize(t *testing.T) {
 		t.Fatalf("expected positive size, got %d", size)
 	}
 
-	// Ensure snapshot stored
+	// Ensure snapshot stored.
 	cached, err := loadStoredOverviewSize(target)
 	if err != nil {
 		t.Fatalf("loadStoredOverviewSize: %v", err)
@@ -279,13 +274,13 @@ func TestLoadCacheExpiresWhenDirectoryChanges(t *testing.T) {
 		t.Fatalf("saveCacheToDisk: %v", err)
 	}
 
-	// Touch directory to advance mtime beyond grace period.
+	// Advance mtime beyond grace period.
 	time.Sleep(time.Millisecond * 10)
 	if err := os.Chtimes(target, time.Now(), time.Now()); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	// Force modtime difference beyond grace window by simulating an older cache entry.
+	// Simulate older cache entry to exceed grace window.
 	cachePath, err := getCachePath(target)
 	if err != nil {
 		t.Fatalf("getCachePath: %v", err)
@@ -335,24 +330,24 @@ func TestScanPathPermissionError(t *testing.T) {
 		t.Fatalf("create locked dir: %v", err)
 	}
 
-	// Create a file inside before locking, just to be sure
+	// Create a file before locking.
 	if err := os.WriteFile(filepath.Join(lockedDir, "secret.txt"), []byte("shh"), 0o644); err != nil {
 		t.Fatalf("write secret: %v", err)
 	}
 
-	// Remove permissions
+	// Remove permissions.
 	if err := os.Chmod(lockedDir, 0o000); err != nil {
 		t.Fatalf("chmod 000: %v", err)
 	}
 	defer func() {
-		// Restore permissions so cleanup can work
+		// Restore permissions for cleanup.
 		_ = os.Chmod(lockedDir, 0o755)
 	}()
 
 	var files, dirs, bytes int64
 	current := ""
 
-	// Scanning the locked dir itself should fail
+	// Scanning the locked dir itself should fail.
 	_, err := scanPathConcurrent(lockedDir, &files, &dirs, &bytes, &current)
 	if err == nil {
 		t.Fatalf("expected error scanning locked directory, got nil")

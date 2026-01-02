@@ -11,28 +11,29 @@ import (
 )
 
 var (
-	titleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#C79FD7")).Bold(true)
-	subtleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#9E9E9E"))
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD75F"))
-	dangerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Bold(true)
-	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#87D787"))
-	lineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#5A5A5A"))
-	hatStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+	titleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#C79FD7")).Bold(true)
+	subtleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
+	warnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD75F"))
+	dangerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5F5F")).Bold(true)
+	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#A5D6A7"))
+	lineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#404040"))
+	hatStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4D4D"))
+	primaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9"))
 )
 
 const (
 	colWidth    = 38
-	iconCPU     = "⚙"
-	iconMemory  = "▦"
-	iconGPU     = "▣"
-	iconDisk    = "▤"
+	iconCPU     = "◉"
+	iconMemory  = "◫"
+	iconGPU     = "◧"
+	iconDisk    = "▥"
 	iconNetwork = "⇅"
-	iconBattery = "▮"
-	iconSensors = "♨"
-	iconProcs   = "▶"
+	iconBattery = "◪"
+	iconSensors = "◈"
+	iconProcs   = "❊"
 )
 
-// Check if it's Christmas season (Dec 10-31)
+// isChristmasSeason reports Dec 10-31.
 func isChristmasSeason() bool {
 	now := time.Now()
 	month := now.Month()
@@ -40,7 +41,7 @@ func isChristmasSeason() bool {
 	return month == time.December && day >= 10 && day <= 31
 }
 
-// Mole body frames (legs animate)
+// Mole body frames.
 var moleBody = [][]string{
 	{
 		`     /\_/\`,
@@ -68,7 +69,7 @@ var moleBody = [][]string{
 	},
 }
 
-// Mole body frames with Christmas hat
+// Mole body frames with Christmas hat.
 var moleBodyWithHat = [][]string{
 	{
 		`       *`,
@@ -104,7 +105,7 @@ var moleBodyWithHat = [][]string{
 	},
 }
 
-// Generate frames with horizontal movement
+// getMoleFrame renders the animated mole.
 func getMoleFrame(animFrame int, termWidth int) string {
 	var body []string
 	var bodyIdx int
@@ -118,15 +119,12 @@ func getMoleFrame(animFrame int, termWidth int) string {
 		body = moleBody[bodyIdx]
 	}
 
-	// Calculate mole width (approximate)
 	moleWidth := 15
-	// Move across terminal width
 	maxPos := termWidth - moleWidth
 	if maxPos < 0 {
 		maxPos = 0
 	}
 
-	// Move position: 0 -> maxPos -> 0
 	cycleLength := maxPos * 2
 	if cycleLength == 0 {
 		cycleLength = 1
@@ -140,7 +138,6 @@ func getMoleFrame(animFrame int, termWidth int) string {
 	var lines []string
 
 	if isChristmas {
-		// Render with red hat on first 3 lines
 		for i, line := range body {
 			if i < 3 {
 				lines = append(lines, padding+hatStyle.Render(line))
@@ -164,30 +161,33 @@ type cardData struct {
 }
 
 func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int) string {
-	// Title
 	title := titleStyle.Render("Mole Status")
 
-	// Health Score with color and label
 	scoreStyle := getScoreStyle(m.HealthScore)
 	scoreText := subtleStyle.Render("Health ") + scoreStyle.Render(fmt.Sprintf("● %d", m.HealthScore))
 
-	// Hardware info
+	// Hardware info for a single line.
 	infoParts := []string{}
 	if m.Hardware.Model != "" {
-		infoParts = append(infoParts, m.Hardware.Model)
+		infoParts = append(infoParts, primaryStyle.Render(m.Hardware.Model))
 	}
 	if m.Hardware.CPUModel != "" {
 		cpuInfo := m.Hardware.CPUModel
+		// Append GPU core count when available.
 		if len(m.GPU) > 0 && m.GPU[0].CoreCount > 0 {
-			cpuInfo += fmt.Sprintf(" (%d GPU cores)", m.GPU[0].CoreCount)
+			cpuInfo += fmt.Sprintf(" (%dGPU)", m.GPU[0].CoreCount)
 		}
 		infoParts = append(infoParts, cpuInfo)
 	}
+	var specs []string
 	if m.Hardware.TotalRAM != "" {
-		infoParts = append(infoParts, m.Hardware.TotalRAM)
+		specs = append(specs, m.Hardware.TotalRAM)
 	}
 	if m.Hardware.DiskSize != "" {
-		infoParts = append(infoParts, m.Hardware.DiskSize)
+		specs = append(specs, m.Hardware.DiskSize)
+	}
+	if len(specs) > 0 {
+		infoParts = append(infoParts, strings.Join(specs, "/"))
 	}
 	if m.Hardware.OSVersion != "" {
 		infoParts = append(infoParts, m.Hardware.OSVersion)
@@ -195,30 +195,24 @@ func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int
 
 	headerLine := title + "  " + scoreText + "  " + subtleStyle.Render(strings.Join(infoParts, " · "))
 
-	// Running mole animation
 	mole := getMoleFrame(animFrame, termWidth)
 
 	if errMsg != "" {
-		return lipgloss.JoinVertical(lipgloss.Left, headerLine, "", mole, dangerStyle.Render(errMsg), "")
+		return lipgloss.JoinVertical(lipgloss.Left, headerLine, "", mole, dangerStyle.Render("ERROR: "+errMsg), "")
 	}
 	return headerLine + "\n" + mole
 }
 
 func getScoreStyle(score int) lipgloss.Style {
 	if score >= 90 {
-		// Excellent - Bright Green
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#87FF87")).Bold(true)
 	} else if score >= 75 {
-		// Good - Green
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#87D787")).Bold(true)
 	} else if score >= 60 {
-		// Fair - Yellow
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD75F")).Bold(true)
 	} else if score >= 40 {
-		// Poor - Orange
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAF5F")).Bold(true)
 	} else {
-		// Critical - Red
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Bold(true)
 	}
 }
@@ -232,7 +226,6 @@ func buildCards(m MetricsSnapshot, _ int) []cardData {
 		renderProcessCard(m.TopProcesses),
 		renderNetworkCard(m.Network, m.Proxy),
 	}
-	// Only show sensors if we have valid temperature readings
 	if hasSensorData(m.Sensors) {
 		cards = append(cards, renderSensorsCard(m.Sensors))
 	}
@@ -326,7 +319,7 @@ func renderMemoryCard(mem MemoryStatus) cardData {
 	} else {
 		lines = append(lines, fmt.Sprintf("Swap   %s", subtleStyle.Render("not in use")))
 	}
-	// Memory pressure
+	// Memory pressure status.
 	if mem.Pressure != "" {
 		pressureStyle := okStyle
 		pressureText := "Status " + mem.Pressure
@@ -397,7 +390,6 @@ func formatDiskLine(label string, d DiskStatus) string {
 }
 
 func ioBar(rate float64) string {
-	// Scale: 0-50 MB/s maps to 0-5 blocks
 	filled := int(rate / 10.0)
 	if filled > 5 {
 		filled = 5
@@ -433,7 +425,7 @@ func renderProcessCard(procs []ProcessInfo) cardData {
 }
 
 func miniBar(percent float64) string {
-	filled := int(percent / 20) // 5 chars max for 100%
+	filled := int(percent / 20)
 	if filled > 5 {
 		filled = 5
 	}
@@ -463,7 +455,7 @@ func renderNetworkCard(netStats []NetworkStatus, proxy ProxyStatus) cardData {
 		txBar := netBar(totalTx)
 		lines = append(lines, fmt.Sprintf("Down   %s  %s", rxBar, formatRate(totalRx)))
 		lines = append(lines, fmt.Sprintf("Up     %s  %s", txBar, formatRate(totalTx)))
-		// Show proxy and IP in one line
+		// Show proxy and IP on one line.
 		var infoParts []string
 		if proxy.Enabled {
 			infoParts = append(infoParts, "Proxy "+proxy.Type)
@@ -479,7 +471,6 @@ func renderNetworkCard(netStats []NetworkStatus, proxy ProxyStatus) cardData {
 }
 
 func netBar(rate float64) string {
-	// Scale: 0-10 MB/s maps to 0-5 blocks
 	filled := int(rate / 2.0)
 	if filled > 5 {
 		filled = 5
@@ -503,8 +494,6 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
 		lines = append(lines, subtleStyle.Render("No battery"))
 	} else {
 		b := batts[0]
-		// Line 1: label + bar + percentage (consistent with other cards)
-		// Only show red when battery is critically low
 		statusLower := strings.ToLower(b.Status)
 		percentText := fmt.Sprintf("%5.1f%%", b.Percent)
 		if b.Percent < 20 && statusLower != "charging" && statusLower != "charged" {
@@ -512,7 +501,6 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
 		}
 		lines = append(lines, fmt.Sprintf("Level  %s  %s", batteryProgressBar(b.Percent), percentText))
 
-		// Line 2: status
 		statusIcon := ""
 		statusStyle := subtleStyle
 		if statusLower == "charging" || statusLower == "charged" {
@@ -521,7 +509,6 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
 		} else if b.Percent < 20 {
 			statusStyle = dangerStyle
 		}
-		// Capitalize first letter
 		statusText := b.Status
 		if len(statusText) > 0 {
 			statusText = strings.ToUpper(statusText[:1]) + strings.ToLower(statusText[1:])
@@ -529,9 +516,18 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
 		if b.TimeLeft != "" {
 			statusText += " · " + b.TimeLeft
 		}
+		// Add power info.
+		if statusLower == "charging" || statusLower == "charged" {
+			if thermal.SystemPower > 0 {
+				statusText += fmt.Sprintf(" · %.0fW", thermal.SystemPower)
+			} else if thermal.AdapterPower > 0 {
+				statusText += fmt.Sprintf(" · %.0fW Adapter", thermal.AdapterPower)
+			}
+		} else if thermal.BatteryPower > 0 {
+			statusText += fmt.Sprintf(" · %.0fW", thermal.BatteryPower)
+		}
 		lines = append(lines, statusStyle.Render(statusText+statusIcon))
 
-		// Line 3: Health + cycles + temp
 		healthParts := []string{}
 		if b.Health != "" {
 			healthParts = append(healthParts, b.Health)
@@ -540,7 +536,6 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
 			healthParts = append(healthParts, fmt.Sprintf("%d cycles", b.CycleCount))
 		}
 
-		// Add temperature if available
 		if thermal.CPUTemp > 0 {
 			tempStyle := subtleStyle
 			if thermal.CPUTemp > 80 {
@@ -551,7 +546,6 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
 			healthParts = append(healthParts, tempStyle.Render(fmt.Sprintf("%.0f°C", thermal.CPUTemp)))
 		}
 
-		// Add fan speed if available
 		if thermal.FanSpeed > 0 {
 			healthParts = append(healthParts, fmt.Sprintf("%d RPM", thermal.FanSpeed))
 		}
@@ -580,14 +574,13 @@ func renderSensorsCard(sensors []SensorReading) cardData {
 
 func renderCard(data cardData, width int, height int) string {
 	titleText := data.icon + " " + data.title
-	lineLen := width - lipgloss.Width(titleText) - 1
+	lineLen := width - lipgloss.Width(titleText) - 2
 	if lineLen < 4 {
 		lineLen = 4
 	}
-	header := titleStyle.Render(titleText) + " " + lineStyle.Render(strings.Repeat("─", lineLen))
+	header := titleStyle.Render(titleText) + "  " + lineStyle.Render(strings.Repeat("╌", lineLen))
 	content := header + "\n" + strings.Join(data.lines, "\n")
 
-	// Pad to target height
 	lines := strings.Split(content, "\n")
 	for len(lines) < height {
 		lines = append(lines, "")
@@ -596,7 +589,7 @@ func renderCard(data cardData, width int, height int) string {
 }
 
 func progressBar(percent float64) string {
-	total := 18
+	total := 16
 	if percent < 0 {
 		percent = 0
 	}
@@ -604,9 +597,6 @@ func progressBar(percent float64) string {
 		percent = 100
 	}
 	filled := int(percent / 100 * float64(total))
-	if filled > total {
-		filled = total
-	}
 
 	var builder strings.Builder
 	for i := 0; i < total; i++ {
@@ -620,7 +610,7 @@ func progressBar(percent float64) string {
 }
 
 func batteryProgressBar(percent float64) string {
-	total := 18
+	total := 16
 	if percent < 0 {
 		percent = 0
 	}
@@ -628,9 +618,6 @@ func batteryProgressBar(percent float64) string {
 		percent = 100
 	}
 	filled := int(percent / 100 * float64(total))
-	if filled > total {
-		filled = total
-	}
 
 	var builder strings.Builder
 	for i := 0; i < total; i++ {
@@ -645,9 +632,9 @@ func batteryProgressBar(percent float64) string {
 
 func colorizePercent(percent float64, s string) string {
 	switch {
-	case percent >= 90:
+	case percent >= 85:
 		return dangerStyle.Render(s)
-	case percent >= 70:
+	case percent >= 60:
 		return warnStyle.Render(s)
 	default:
 		return okStyle.Render(s)
@@ -766,7 +753,6 @@ func renderTwoColumns(cards []cardData, width int) string {
 		}
 	}
 
-	// Add empty lines between rows for separation
 	var spacedRows []string
 	for i, r := range rows {
 		if i > 0 {

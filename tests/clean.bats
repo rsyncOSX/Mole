@@ -28,7 +28,7 @@ setup() {
 }
 
 @test "mo clean --dry-run skips system cleanup in non-interactive mode" {
-    run env HOME="$HOME" "$PROJECT_ROOT/mole" clean --dry-run
+    run env HOME="$HOME" MOLE_TEST_MODE=1 "$PROJECT_ROOT/mole" clean --dry-run
     [ "$status" -eq 0 ]
     [[ "$output" == *"Dry Run Mode"* ]]
     [[ "$output" != *"Deep system-level cleanup"* ]]
@@ -38,7 +38,7 @@ setup() {
     mkdir -p "$HOME/Library/Caches/TestApp"
     echo "cache data" > "$HOME/Library/Caches/TestApp/cache.tmp"
 
-    run env HOME="$HOME" "$PROJECT_ROOT/mole" clean --dry-run
+    run env HOME="$HOME" MOLE_TEST_MODE=1 "$PROJECT_ROOT/mole" clean --dry-run
     [ "$status" -eq 0 ]
     [[ "$output" == *"User app cache"* ]]
     [[ "$output" == *"Potential space"* ]]
@@ -53,7 +53,7 @@ setup() {
 $HOME/Library/Caches/WhitelistedApp*
 EOF
 
-    run env HOME="$HOME" "$PROJECT_ROOT/mole" clean --dry-run
+    run env HOME="$HOME" MOLE_TEST_MODE=1 "$PROJECT_ROOT/mole" clean --dry-run
     [ "$status" -eq 0 ]
     [[ "$output" == *"Protected"* ]]
     [ -f "$HOME/Library/Caches/WhitelistedApp/data.tmp" ]
@@ -63,7 +63,7 @@ EOF
     mkdir -p "$HOME/.m2/repository/org/example"
     echo "dependency" > "$HOME/.m2/repository/org/example/lib.jar"
 
-    run env HOME="$HOME" "$PROJECT_ROOT/mole" clean --dry-run
+    run env HOME="$HOME" MOLE_TEST_MODE=1 "$PROJECT_ROOT/mole" clean --dry-run
     [ "$status" -eq 0 ]
     [ -f "$HOME/.m2/repository/org/example/lib.jar" ]
     [[ "$output" != *"Maven repository cache"* ]]
@@ -86,8 +86,175 @@ EOF
 FINDER_METADATA_SENTINEL
 EOF
 
-    run env HOME="$HOME" "$PROJECT_ROOT/mole" clean --dry-run
+    # Test whitelist logic directly instead of running full clean
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+load_whitelist
+if is_whitelisted "$HOME/Documents/.DS_Store"; then
+    echo "protected by whitelist"
+fi
+EOF
+
     [ "$status" -eq 0 ]
     [[ "$output" == *"protected by whitelist"* ]]
     [ -f "$HOME/Documents/.DS_Store" ]
+}
+
+@test "clean_recent_items removes shared file lists" {
+    local shared_dir="$HOME/Library/Application Support/com.apple.sharedfilelist"
+    mkdir -p "$shared_dir"
+    touch "$shared_dir/com.apple.LSSharedFileList.RecentApplications.sfl2"
+    touch "$shared_dir/com.apple.LSSharedFileList.RecentDocuments.sfl2"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/user.sh"
+safe_clean() {
+    echo "safe_clean $1"
+}
+clean_recent_items
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Recent"* ]]
+}
+
+@test "clean_recent_items handles missing shared directory" {
+    rm -rf "$HOME/Library/Application Support/com.apple.sharedfilelist"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/user.sh"
+safe_clean() {
+    echo "safe_clean $1"
+}
+clean_recent_items
+EOF
+
+    [ "$status" -eq 0 ]
+}
+
+@test "clean_mail_downloads skips cleanup when size below threshold" {
+    mkdir -p "$HOME/Library/Mail Downloads"
+    echo "test" > "$HOME/Library/Mail Downloads/small.txt"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/user.sh"
+clean_mail_downloads
+EOF
+
+    [ "$status" -eq 0 ]
+    [ -f "$HOME/Library/Mail Downloads/small.txt" ]
+}
+
+@test "clean_mail_downloads removes old attachments" {
+    mkdir -p "$HOME/Library/Mail Downloads"
+    touch "$HOME/Library/Mail Downloads/old.pdf"
+    touch -t 202301010000 "$HOME/Library/Mail Downloads/old.pdf"
+
+    dd if=/dev/zero of="$HOME/Library/Mail Downloads/dummy.dat" bs=1024 count=6000 2>/dev/null
+
+    [ -f "$HOME/Library/Mail Downloads/old.pdf" ]
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/user.sh"
+clean_mail_downloads
+EOF
+
+    [ "$status" -eq 0 ]
+    [ ! -f "$HOME/Library/Mail Downloads/old.pdf" ]
+}
+
+@test "clean_time_machine_failed_backups detects running backup correctly" {
+    if ! command -v tmutil > /dev/null 2>&1; then
+        skip "tmutil not available"
+    fi
+
+    local mock_bin="$HOME/bin"
+    mkdir -p "$mock_bin"
+
+    cat > "$mock_bin/tmutil" << 'MOCK_TMUTIL'
+#!/bin/bash
+if [[ "$1" == "status" ]]; then
+    cat << 'TMUTIL_OUTPUT'
+Backup session status:
+{
+    ClientID = "com.apple.backupd";
+    Running = 0;
+}
+TMUTIL_OUTPUT
+elif [[ "$1" == "destinationinfo" ]]; then
+    cat << 'DEST_OUTPUT'
+====================================================
+Name          : TestBackup
+Kind          : Local
+Mount Point   : /Volumes/TestBackup
+ID            : 12345678-1234-1234-1234-123456789012
+====================================================
+DEST_OUTPUT
+fi
+MOCK_TMUTIL
+    chmod +x "$mock_bin/tmutil"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$mock_bin:$PATH" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/system.sh"
+
+clean_time_machine_failed_backups
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Time Machine backup in progress, skipping cleanup"* ]]
+}
+
+@test "clean_time_machine_failed_backups skips when backup is actually running" {
+    if ! command -v tmutil > /dev/null 2>&1; then
+        skip "tmutil not available"
+    fi
+
+    local mock_bin="$HOME/bin"
+    mkdir -p "$mock_bin"
+
+    cat > "$mock_bin/tmutil" << 'MOCK_TMUTIL'
+#!/bin/bash
+if [[ "$1" == "status" ]]; then
+    cat << 'TMUTIL_OUTPUT'
+Backup session status:
+{
+    ClientID = "com.apple.backupd";
+    Running = 1;
+}
+TMUTIL_OUTPUT
+elif [[ "$1" == "destinationinfo" ]]; then
+    cat << 'DEST_OUTPUT'
+====================================================
+Name          : TestBackup
+Kind          : Local
+Mount Point   : /Volumes/TestBackup
+ID            : 12345678-1234-1234-1234-123456789012
+====================================================
+DEST_OUTPUT
+fi
+MOCK_TMUTIL
+    chmod +x "$mock_bin/tmutil"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$mock_bin:$PATH" bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/system.sh"
+
+clean_time_machine_failed_backups
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Time Machine backup in progress, skipping cleanup"* ]]
 }

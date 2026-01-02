@@ -15,7 +15,7 @@ func collectTopProcesses() []ProcessInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	// Use ps to get top processes by CPU
+	// Use ps to get top processes by CPU.
 	out, err := runCmd(ctx, "ps", "-Aceo", "pcpu,pmem,comm", "-r")
 	if err != nil {
 		return nil
@@ -24,10 +24,10 @@ func collectTopProcesses() []ProcessInfo {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	var procs []ProcessInfo
 	for i, line := range lines {
-		if i == 0 { // skip header
+		if i == 0 {
 			continue
 		}
-		if i > 5 { // top 5
+		if i > 5 {
 			break
 		}
 		fields := strings.Fields(line)
@@ -37,7 +37,7 @@ func collectTopProcesses() []ProcessInfo {
 		cpuVal, _ := strconv.ParseFloat(fields[0], 64)
 		memVal, _ := strconv.ParseFloat(fields[1], 64)
 		name := fields[len(fields)-1]
-		// Get just the process name without path
+		// Strip path from command name.
 		if idx := strings.LastIndex(name, "/"); idx >= 0 {
 			name = name[idx+1:]
 		}

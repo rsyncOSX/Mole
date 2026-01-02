@@ -72,7 +72,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.metrics = msg.data
 		m.lastUpdated = msg.data.CollectedAt
 		m.collecting = false
-		// Mark ready after first successful data collection
+		// Mark ready after first successful data collection.
 		if !m.ready {
 			m.ready = true
 		}
@@ -126,7 +126,7 @@ func animTick() tea.Cmd {
 }
 
 func animTickWithSpeed(cpuUsage float64) tea.Cmd {
-	// Higher CPU = faster animation (50ms to 300ms)
+	// Higher CPU = faster animation.
 	interval := 300 - int(cpuUsage*2.5)
 	if interval < 50 {
 		interval = 50

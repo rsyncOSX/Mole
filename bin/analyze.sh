@@ -1,5 +1,7 @@
 #!/bin/bash
-# Entry point for the Go-based disk analyzer binary bundled with Mole.
+# Mole - Analyze command.
+# Runs the Go disk analyzer UI.
+# Uses bundled analyze-go binary.
 
 set -euo pipefail
 

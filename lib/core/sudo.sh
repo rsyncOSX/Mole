@@ -16,6 +16,7 @@ check_touchid_support() {
     return 1
 }
 
+# Detect clamshell mode (lid closed)
 is_clamshell_mode() {
     # ioreg is missing (not macOS) -> treat as lid open
     if ! command -v ioreg > /dev/null 2>&1; then
@@ -115,15 +116,23 @@ request_sudo_access() {
     # Check if in clamshell mode - if yes, skip Touch ID entirely
     if is_clamshell_mode; then
         echo -e "${PURPLE}${ICON_ARROW}${NC} ${prompt_msg}"
-        _request_password "$tty_path"
-        return $?
+        if _request_password "$tty_path"; then
+            # Clear all prompt lines (use safe clearing method)
+            safe_clear_lines 3 "$tty_path"
+            return 0
+        fi
+        return 1
     fi
 
     # Not in clamshell mode - try Touch ID if configured
     if ! check_touchid_support; then
         echo -e "${PURPLE}${ICON_ARROW}${NC} ${prompt_msg}"
-        _request_password "$tty_path"
-        return $?
+        if _request_password "$tty_path"; then
+            # Clear all prompt lines (use safe clearing method)
+            safe_clear_lines 3 "$tty_path"
+            return 0
+        fi
+        return 1
     fi
 
     # Touch ID is available and not in clamshell mode
@@ -142,7 +151,8 @@ request_sudo_access() {
             wait "$sudo_pid" 2> /dev/null
             local exit_code=$?
             if [[ $exit_code -eq 0 ]] && sudo -n true 2> /dev/null; then
-                # Touch ID succeeded
+                # Touch ID succeeded - clear the prompt line
+                safe_clear_lines 1 "$tty_path"
                 return 0
             fi
             # Touch ID failed or cancelled
@@ -168,10 +178,15 @@ request_sudo_access() {
     sleep 1
 
     # Clear any leftover prompts on the screen
-    printf "\r\033[2K" > "$tty_path"
+    safe_clear_line "$tty_path"
 
     # Now use our password input (this should not trigger Touch ID again)
-    _request_password "$tty_path"
+    if _request_password "$tty_path"; then
+        # Clear all prompt lines (use safe clearing method)
+        safe_clear_lines 3 "$tty_path"
+        return 0
+    fi
+    return 1
 }
 
 # ============================================================================
@@ -182,8 +197,7 @@ request_sudo_access() {
 MOLE_SUDO_KEEPALIVE_PID=""
 MOLE_SUDO_ESTABLISHED="false"
 
-# Start sudo keepalive background process
-# Returns: PID of keepalive process
+# Start sudo keepalive
 _start_sudo_keepalive() {
     # Start background keepalive process with all outputs redirected
     # This is critical: command substitution waits for all file descriptors to close
@@ -212,8 +226,7 @@ _start_sudo_keepalive() {
     echo $pid
 }
 
-# Stop sudo keepalive process
-# Args: $1 - PID of keepalive process
+# Stop sudo keepalive
 _stop_sudo_keepalive() {
     local pid="${1:-}"
     if [[ -n "$pid" ]]; then
@@ -227,8 +240,7 @@ has_sudo_session() {
     sudo -n true 2> /dev/null
 }
 
-# Request sudo access (wrapper for common.sh function)
-# Args: $1 - prompt message
+# Request administrative access
 request_sudo() {
     local prompt_msg="${1:-Admin access required}"
 
@@ -244,8 +256,7 @@ request_sudo() {
     fi
 }
 
-# Ensure sudo session is established with keepalive
-# Args: $1 - prompt message
+# Maintain active sudo session with keepalive
 ensure_sudo_session() {
     local prompt="${1:-Admin access required}"
 
@@ -287,8 +298,7 @@ register_sudo_cleanup() {
     trap stop_sudo_session EXIT INT TERM
 }
 
-# Check if sudo is likely needed for given operations
-# Args: $@ - list of operations to check
+# Predict if operation requires administrative access
 will_need_sudo() {
     local -a operations=("$@")
     for op in "${operations[@]}"; do

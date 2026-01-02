@@ -29,11 +29,7 @@ fi
 # Path Validation
 # ============================================================================
 
-# Validate path for deletion operations
-# Checks: non-empty, absolute, no traversal, no control chars, not system dir
-#
-# Args: $1 - path to validate
-# Returns: 0 if safe, 1 if unsafe
+# Validate path for deletion (absolute, no traversal, not system dir)
 validate_path_for_deletion() {
     local path="$1"
 
@@ -61,6 +57,13 @@ validate_path_for_deletion() {
         return 1
     fi
 
+    # Allow deletion of coresymbolicationd cache (safe system cache that can be rebuilt)
+    case "$path" in
+        /System/Library/Caches/com.apple.coresymbolicationd/data | /System/Library/Caches/com.apple.coresymbolicationd/data/*)
+            return 0
+            ;;
+    esac
+
     # Check path isn't critical system directory
     case "$path" in
         / | /bin | /sbin | /usr | /usr/bin | /usr/sbin | /etc | /var | /System | /System/* | /Library/Extensions)
@@ -76,13 +79,7 @@ validate_path_for_deletion() {
 # Safe Removal Operations
 # ============================================================================
 
-# Safe wrapper around rm -rf with path validation
-#
-# Args:
-#   $1 - path to remove
-#   $2 - silent mode (optional, default: false)
-#
-# Returns: 0 on success, 1 on failure
+# Safe wrapper around rm -rf with validation
 safe_remove() {
     local path="$1"
     local silent="${2:-false}"
@@ -97,21 +94,37 @@ safe_remove() {
         return 0
     fi
 
+    # Dry-run mode: log but don't delete
+    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
+        debug_log "[DRY RUN] Would remove: $path"
+        return 0
+    fi
+
     debug_log "Removing: $path"
 
     # Perform the deletion
-    if rm -rf "$path" 2> /dev/null; then # SAFE: safe_remove implementation
+    # Use || to capture the exit code so set -e won't abort on rm failures
+    local error_msg
+    local rm_exit=0
+    error_msg=$(rm -rf "$path" 2>&1) || rm_exit=$? # safe_remove
+
+    if [[ $rm_exit -eq 0 ]]; then
         return 0
     else
-        [[ "$silent" != "true" ]] && log_error "Failed to remove: $path"
+        # Check if it's a permission error
+        if [[ "$error_msg" == *"Permission denied"* ]] || [[ "$error_msg" == *"Operation not permitted"* ]]; then
+            MOLE_PERMISSION_DENIED_COUNT=${MOLE_PERMISSION_DENIED_COUNT:-0}
+            MOLE_PERMISSION_DENIED_COUNT=$((MOLE_PERMISSION_DENIED_COUNT + 1))
+            export MOLE_PERMISSION_DENIED_COUNT
+            debug_log "Permission denied: $path (may need Full Disk Access)"
+        else
+            [[ "$silent" != "true" ]] && log_error "Failed to remove: $path"
+        fi
         return 1
     fi
 }
 
-# Safe sudo remove with additional symlink protection
-#
-# Args: $1 - path to remove
-# Returns: 0 on success, 1 on failure
+# Safe sudo removal with symlink protection
 safe_sudo_remove() {
     local path="$1"
 
@@ -132,6 +145,12 @@ safe_sudo_remove() {
         return 1
     fi
 
+    # Dry-run mode: log but don't delete
+    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
+        debug_log "[DRY RUN] Would remove (sudo): $path"
+        return 0
+    fi
+
     debug_log "Removing (sudo): $path"
 
     # Perform the deletion
@@ -147,15 +166,7 @@ safe_sudo_remove() {
 # Safe Find and Delete Operations
 # ============================================================================
 
-# Safe find delete with depth limit and validation
-#
-# Args:
-#   $1 - base directory
-#   $2 - file pattern (e.g., "*.log")
-#   $3 - age in days (0 = all files, default: 7)
-#   $4 - type filter ("f" or "d", default: "f")
-#
-# Returns: 0 on success, 1 on failure
+# Safe file discovery and deletion with depth and age limits
 safe_find_delete() {
     local base_dir="$1"
     local pattern="$2"
@@ -181,44 +192,38 @@ safe_find_delete() {
 
     debug_log "Finding in $base_dir: $pattern (age: ${age_days}d, type: $type_filter)"
 
-    # Execute find with safety limits (maxdepth 5 covers most app cache structures)
-    if [[ "$age_days" -eq 0 ]]; then
-        # Delete all matching files without time restriction
-        command find "$base_dir" \
-            -maxdepth 5 \
-            -name "$pattern" \
-            -type "$type_filter" \
-            -delete 2> /dev/null || true
-    else
-        # Delete files older than age_days
-        command find "$base_dir" \
-            -maxdepth 5 \
-            -name "$pattern" \
-            -type "$type_filter" \
-            -mtime "+$age_days" \
-            -delete 2> /dev/null || true
+    local find_args=("-maxdepth" "5" "-name" "$pattern" "-type" "$type_filter")
+    if [[ "$age_days" -gt 0 ]]; then
+        find_args+=("-mtime" "+$age_days")
     fi
+
+    # Iterate results to respect should_protect_path when available
+    while IFS= read -r -d '' match; do
+        if command -v should_protect_path > /dev/null 2>&1; then
+            if should_protect_path "$match"; then
+                continue
+            fi
+        fi
+        safe_remove "$match" true || true
+    done < <(command find "$base_dir" "${find_args[@]}" -print0 2> /dev/null || true)
 
     return 0
 }
 
-# Safe sudo find delete (same as safe_find_delete but with sudo)
-#
-# Args: same as safe_find_delete
-# Returns: 0 on success, 1 on failure
+# Safe sudo discovery and deletion
 safe_sudo_find_delete() {
     local base_dir="$1"
     local pattern="$2"
     local age_days="${3:-7}"
     local type_filter="${4:-f}"
 
-    # Validate base directory
-    if [[ ! -d "$base_dir" ]]; then
-        log_error "Directory does not exist: $base_dir"
-        return 1
+    # Validate base directory (use sudo for permission-restricted dirs)
+    if ! sudo test -d "$base_dir" 2> /dev/null; then
+        debug_log "Directory does not exist (skipping): $base_dir"
+        return 0
     fi
 
-    if [[ -L "$base_dir" ]]; then
+    if sudo test -L "$base_dir" 2> /dev/null; then
         log_error "Refusing to search symlinked directory: $base_dir"
         return 1
     fi
@@ -231,21 +236,20 @@ safe_sudo_find_delete() {
 
     debug_log "Finding (sudo) in $base_dir: $pattern (age: ${age_days}d, type: $type_filter)"
 
-    # Execute find with sudo
-    if [[ "$age_days" -eq 0 ]]; then
-        sudo find "$base_dir" \
-            -maxdepth 5 \
-            -name "$pattern" \
-            -type "$type_filter" \
-            -delete 2> /dev/null || true
-    else
-        sudo find "$base_dir" \
-            -maxdepth 5 \
-            -name "$pattern" \
-            -type "$type_filter" \
-            -mtime "+$age_days" \
-            -delete 2> /dev/null || true
+    local find_args=("-maxdepth" "5" "-name" "$pattern" "-type" "$type_filter")
+    if [[ "$age_days" -gt 0 ]]; then
+        find_args+=("-mtime" "+$age_days")
     fi
+
+    # Iterate results to respect should_protect_path when available
+    while IFS= read -r -d '' match; do
+        if command -v should_protect_path > /dev/null 2>&1; then
+            if should_protect_path "$match"; then
+                continue
+            fi
+        fi
+        safe_sudo_remove "$match" || true
+    done < <(sudo find "$base_dir" "${find_args[@]}" -print0 2> /dev/null || true)
 
     return 0
 }
@@ -254,11 +258,7 @@ safe_sudo_find_delete() {
 # Size Calculation
 # ============================================================================
 
-# Get path size in kilobytes
-# Uses timeout protection to prevent du from hanging on large directories
-#
-# Args: $1 - path
-# Returns: size in KB (0 if path doesn't exist)
+# Get path size in KB (returns 0 if not found)
 get_path_size_kb() {
     local path="$1"
     [[ -z "$path" || ! -e "$path" ]] && {
@@ -266,15 +266,20 @@ get_path_size_kb() {
         return
     }
     # Direct execution without timeout overhead - critical for performance in loops
+    # Use || echo 0 to ensure failure in du (e.g. permission error) doesn't exit script under set -e
+    # Pipefail would normally cause the pipeline to fail if du fails, but || handle catches it.
     local size
-    size=$(command du -sk "$path" 2> /dev/null | awk '{print $1}')
-    echo "${size:-0}"
+    size=$(command du -sk "$path" 2> /dev/null | awk 'NR==1 {print $1; exit}' || true)
+
+    # Ensure size is a valid number (fix for non-numeric du output)
+    if [[ "$size" =~ ^[0-9]+$ ]]; then
+        echo "$size"
+    else
+        echo "0"
+    fi
 }
 
-# Calculate total size of multiple paths
-#
-# Args: $1 - newline-separated list of paths
-# Returns: total size in KB
+# Calculate total size for multiple paths
 calculate_total_size() {
     local files="$1"
     local total_kb=0

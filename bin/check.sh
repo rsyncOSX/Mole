@@ -16,13 +16,20 @@ source "$SCRIPT_DIR/lib/manage/autofix.sh"
 source "$SCRIPT_DIR/lib/check/all.sh"
 
 cleanup_all() {
+    stop_inline_spinner 2> /dev/null || true
     stop_sudo_session
     cleanup_temp_files
 }
 
+handle_interrupt() {
+    cleanup_all
+    exit 130
+}
+
 main() {
     # Register unified cleanup handler
-    trap cleanup_all EXIT INT TERM
+    trap cleanup_all EXIT
+    trap handle_interrupt INT TERM
 
     if [[ -t 1 ]]; then
         clear

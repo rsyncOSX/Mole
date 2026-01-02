@@ -1,5 +1,7 @@
 #!/bin/bash
-# Entry point for the Go-based system status panel bundled with Mole.
+# Mole - Status command.
+# Runs the Go system status panel.
+# Shows live system metrics.
 
 set -euo pipefail
 

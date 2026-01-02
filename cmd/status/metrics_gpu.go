@@ -17,7 +17,7 @@ const (
 	powermetricsTimeout   = 2 * time.Second
 )
 
-// Pre-compiled regex patterns for GPU usage parsing
+// Regex for GPU usage parsing.
 var (
 	gpuActiveResidencyRe = regexp.MustCompile(`GPU HW active residency:\s+([\d.]+)%`)
 	gpuIdleResidencyRe   = regexp.MustCompile(`GPU idle residency:\s+([\d.]+)%`)
@@ -25,7 +25,7 @@ var (
 
 func (c *Collector) collectGPU(now time.Time) ([]GPUStatus, error) {
 	if runtime.GOOS == "darwin" {
-		// Get static GPU info (cached for 10 min)
+		// Static GPU info (cached 10 min).
 		if len(c.cachedGPU) == 0 || c.lastGPUAt.IsZero() || now.Sub(c.lastGPUAt) >= macGPUInfoTTL {
 			if gpus, err := readMacGPUInfo(); err == nil && len(gpus) > 0 {
 				c.cachedGPU = gpus
@@ -33,12 +33,12 @@ func (c *Collector) collectGPU(now time.Time) ([]GPUStatus, error) {
 			}
 		}
 
-		// Get real-time GPU usage
+		// Real-time GPU usage.
 		if len(c.cachedGPU) > 0 {
 			usage := getMacGPUUsage()
 			result := make([]GPUStatus, len(c.cachedGPU))
 			copy(result, c.cachedGPU)
-			// Apply usage to first GPU (Apple Silicon has one integrated GPU)
+			// Apply usage to first GPU (Apple Silicon).
 			if len(result) > 0 {
 				result[0].Usage = usage
 			}
@@ -152,19 +152,18 @@ func readMacGPUInfo() ([]GPUStatus, error) {
 	return gpus, nil
 }
 
-// getMacGPUUsage gets GPU active residency from powermetrics.
-// Returns -1 if unavailable (e.g., not running as root).
+// getMacGPUUsage reads GPU active residency from powermetrics.
 func getMacGPUUsage() float64 {
 	ctx, cancel := context.WithTimeout(context.Background(), powermetricsTimeout)
 	defer cancel()
 
-	// powermetrics requires root, but we try anyway - some systems may have it enabled
+	// powermetrics may require root.
 	out, err := runCmd(ctx, "powermetrics", "--samplers", "gpu_power", "-i", "500", "-n", "1")
 	if err != nil {
 		return -1
 	}
 
-	// Parse "GPU HW active residency:   X.XX%"
+	// Parse "GPU HW active residency: X.XX%".
 	matches := gpuActiveResidencyRe.FindStringSubmatch(out)
 	if len(matches) >= 2 {
 		usage, err := strconv.ParseFloat(matches[1], 64)
@@ -173,7 +172,7 @@ func getMacGPUUsage() float64 {
 		}
 	}
 
-	// Fallback: parse "GPU idle residency: X.XX%" and calculate active
+	// Fallback: parse idle residency and derive active.
 	matchesIdle := gpuIdleResidencyRe.FindStringSubmatch(out)
 	if len(matchesIdle) >= 2 {
 		idle, err := strconv.ParseFloat(matchesIdle[1], 64)

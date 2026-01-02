@@ -5,45 +5,43 @@ import (
 	"strings"
 )
 
-// Health score calculation weights and thresholds
+// Health score weights and thresholds.
 const (
-	// Weights (must sum to ~100 for total score)
+	// Weights.
 	healthCPUWeight     = 30.0
 	healthMemWeight     = 25.0
 	healthDiskWeight    = 20.0
 	healthThermalWeight = 15.0
 	healthIOWeight      = 10.0
 
-	// CPU thresholds
+	// CPU.
 	cpuNormalThreshold = 30.0
 	cpuHighThreshold   = 70.0
 
-	// Memory thresholds
+	// Memory.
 	memNormalThreshold     = 50.0
 	memHighThreshold       = 80.0
 	memPressureWarnPenalty = 5.0
 	memPressureCritPenalty = 15.0
 
-	// Disk thresholds
+	// Disk.
 	diskWarnThreshold = 70.0
 	diskCritThreshold = 90.0
 
-	// Thermal thresholds
+	// Thermal.
 	thermalNormalThreshold = 60.0
 	thermalHighThreshold   = 85.0
 
-	// Disk IO thresholds (MB/s)
+	// Disk IO (MB/s).
 	ioNormalThreshold = 50.0
 	ioHighThreshold   = 150.0
 )
 
 func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, diskIO DiskIOStatus, thermal ThermalStatus) (int, string) {
-	// Start with perfect score
 	score := 100.0
 	issues := []string{}
 
-	// CPU Usage (30% weight) - deduct up to 30 points
-	// 0-30% CPU = 0 deduction, 30-70% = linear, 70-100% = heavy penalty
+	// CPU penalty.
 	cpuPenalty := 0.0
 	if cpu.Usage > cpuNormalThreshold {
 		if cpu.Usage > cpuHighThreshold {
@@ -57,8 +55,7 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 		issues = append(issues, "High CPU")
 	}
 
-	// Memory Usage (25% weight) - deduct up to 25 points
-	// 0-50% = 0 deduction, 50-80% = linear, 80-100% = heavy penalty
+	// Memory penalty.
 	memPenalty := 0.0
 	if mem.UsedPercent > memNormalThreshold {
 		if mem.UsedPercent > memHighThreshold {
@@ -72,7 +69,7 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 		issues = append(issues, "High Memory")
 	}
 
-	// Memory Pressure (extra penalty)
+	// Memory pressure penalty.
 	if mem.Pressure == "warn" {
 		score -= memPressureWarnPenalty
 		issues = append(issues, "Memory Pressure")
@@ -81,7 +78,7 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 		issues = append(issues, "Critical Memory")
 	}
 
-	// Disk Usage (20% weight) - deduct up to 20 points
+	// Disk penalty.
 	diskPenalty := 0.0
 	if len(disks) > 0 {
 		diskUsage := disks[0].UsedPercent
@@ -98,7 +95,7 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 		}
 	}
 
-	// Thermal (15% weight) - deduct up to 15 points
+	// Thermal penalty.
 	thermalPenalty := 0.0
 	if thermal.CPUTemp > 0 {
 		if thermal.CPUTemp > thermalNormalThreshold {
@@ -112,7 +109,7 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 		score -= thermalPenalty
 	}
 
-	// Disk IO (10% weight) - deduct up to 10 points
+	// Disk IO penalty.
 	ioPenalty := 0.0
 	totalIO := diskIO.ReadRate + diskIO.WriteRate
 	if totalIO > ioNormalThreshold {
@@ -125,7 +122,7 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 	}
 	score -= ioPenalty
 
-	// Ensure score is in valid range
+	// Clamp score.
 	if score < 0 {
 		score = 0
 	}
@@ -133,7 +130,7 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 		score = 100
 	}
 
-	// Generate message
+	// Build message.
 	msg := "Excellent"
 	if score >= 90 {
 		msg = "Excellent"

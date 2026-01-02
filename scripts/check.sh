@@ -1,126 +1,189 @@
 #!/bin/bash
-# Unified check script for Mole project
-# Runs all quality checks in one command
+# Code quality checks for Mole.
+# Auto-formats code, then runs lint and syntax checks.
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Colors
+MODE="all"
+
+usage() {
+    cat << 'EOF'
+Usage: ./scripts/check.sh [--format|--no-format]
+
+Options:
+  --format     Apply formatting fixes only (shfmt, gofmt)
+  --no-format  Skip formatting and run checks only
+  --help     Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --format)
+            MODE="format"
+            shift
+            ;;
+        --no-format)
+            MODE="check"
+            shift
+            ;;
+        --help | -h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+cd "$PROJECT_ROOT"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-cd "$PROJECT_ROOT"
+readonly ICON_SUCCESS="✓"
+readonly ICON_ERROR="☻"
+readonly ICON_WARNING="●"
+readonly ICON_LIST="•"
 
-echo -e "${BLUE}=== Running Mole Quality Checks ===${NC}\n"
+echo -e "${BLUE}=== Mole Check (${MODE}) ===${NC}\n"
 
-# 1. Format check
-echo -e "${YELLOW}1. Checking code formatting...${NC}"
-if command -v shfmt > /dev/null 2>&1; then
-    if ./scripts/format.sh --check; then
-        echo -e "${GREEN}✓ Formatting check passed${NC}\n"
+SHELL_FILES=$(find . -type f \( -name "*.sh" -o -name "mole" \) \
+    -not -path "./.git/*" \
+    -not -path "*/node_modules/*" \
+    -not -path "*/tests/tmp-*/*" \
+    -not -path "*/.*" \
+    2> /dev/null)
+
+if [[ "$MODE" == "format" ]]; then
+    echo -e "${YELLOW}Formatting shell scripts...${NC}"
+    if command -v shfmt > /dev/null 2>&1; then
+        echo "$SHELL_FILES" | xargs shfmt -i 4 -ci -sr -w
+        echo -e "${GREEN}${ICON_SUCCESS} Shell formatting complete${NC}\n"
     else
-        echo -e "${RED}✗ Formatting check failed${NC}\n"
+        echo -e "${RED}${ICON_ERROR} shfmt not installed${NC}"
         exit 1
     fi
-else
-    echo -e "${YELLOW}⚠ shfmt not installed, skipping format check${NC}\n"
+
+    if command -v go > /dev/null 2>&1; then
+        echo -e "${YELLOW}Formatting Go code...${NC}"
+        gofmt -w ./cmd
+        echo -e "${GREEN}${ICON_SUCCESS} Go formatting complete${NC}\n"
+    else
+        echo -e "${YELLOW}${ICON_WARNING} go not installed, skipping gofmt${NC}\n"
+    fi
+
+    echo -e "${GREEN}=== Format Completed ===${NC}"
+    exit 0
 fi
 
-# 2. ShellCheck
-echo -e "${YELLOW}2. Running ShellCheck...${NC}"
+if [[ "$MODE" != "check" ]]; then
+    echo -e "${YELLOW}1. Formatting shell scripts...${NC}"
+    if command -v shfmt > /dev/null 2>&1; then
+        echo "$SHELL_FILES" | xargs shfmt -i 4 -ci -sr -w
+        echo -e "${GREEN}${ICON_SUCCESS} Shell formatting applied${NC}\n"
+    else
+        echo -e "${YELLOW}${ICON_WARNING} shfmt not installed, skipping${NC}\n"
+    fi
+
+    if command -v go > /dev/null 2>&1; then
+        echo -e "${YELLOW}2. Formatting Go code...${NC}"
+        gofmt -w ./cmd
+        echo -e "${GREEN}${ICON_SUCCESS} Go formatting applied${NC}\n"
+    fi
+fi
+
+echo -e "${YELLOW}3. Running ShellCheck...${NC}"
 if command -v shellcheck > /dev/null 2>&1; then
-    # Count total files
-    SHELL_FILES=$(find . -type f \( -name "*.sh" -o -name "mole" \) -not -path "./tests/*" -not -path "./.git/*")
-    FILE_COUNT=$(echo "$SHELL_FILES" | wc -l | tr -d ' ')
-
-    if shellcheck mole bin/*.sh lib/*.sh scripts/*.sh 2>&1 | grep -q "SC[0-9]"; then
-        echo -e "${YELLOW}⚠ ShellCheck found some issues (non-critical):${NC}"
-        shellcheck mole bin/*.sh lib/*.sh scripts/*.sh 2>&1 | head -20
-        echo -e "${GREEN}✓ ShellCheck completed (${FILE_COUNT} files checked)${NC}\n"
+    if shellcheck mole bin/*.sh lib/*/*.sh scripts/*.sh; then
+        echo -e "${GREEN}${ICON_SUCCESS} ShellCheck passed${NC}\n"
     else
-        echo -e "${GREEN}✓ ShellCheck passed (${FILE_COUNT} files checked)${NC}\n"
-    fi
-else
-    echo -e "${YELLOW}⚠ shellcheck not installed, skipping${NC}\n"
-fi
-
-# 3. Unit tests (if available)
-echo -e "${YELLOW}3. Running tests...${NC}"
-if command -v bats > /dev/null 2>&1 && [ -d "tests" ]; then
-    if bats tests/*.bats; then
-        echo -e "${GREEN}✓ Tests passed${NC}\n"
-    else
-        echo -e "${RED}✗ Tests failed (see output above)${NC}\n"
+        echo -e "${RED}${ICON_ERROR} ShellCheck failed${NC}\n"
         exit 1
     fi
 else
-    echo -e "${YELLOW}⚠ bats not installed or no tests found, skipping${NC}\n"
+    echo -e "${YELLOW}${ICON_WARNING} shellcheck not installed, skipping${NC}\n"
 fi
 
-# 4. Code optimization checks
-echo -e "${YELLOW}4. Checking code optimizations...${NC}"
+echo -e "${YELLOW}4. Running syntax check...${NC}"
+if ! bash -n mole; then
+    echo -e "${RED}${ICON_ERROR} Syntax check failed (mole)${NC}\n"
+    exit 1
+fi
+for script in bin/*.sh; do
+    if ! bash -n "$script"; then
+        echo -e "${RED}${ICON_ERROR} Syntax check failed ($script)${NC}\n"
+        exit 1
+    fi
+done
+find lib -name "*.sh" | while read -r script; do
+    if ! bash -n "$script"; then
+        echo -e "${RED}${ICON_ERROR} Syntax check failed ($script)${NC}\n"
+        exit 1
+    fi
+done
+echo -e "${GREEN}${ICON_SUCCESS} Syntax check passed${NC}\n"
+
+echo -e "${YELLOW}5. Checking optimizations...${NC}"
 OPTIMIZATION_SCORE=0
 TOTAL_CHECKS=0
 
-# Check 1: Keyboard input handling (restored to 1s for reliability)
 ((TOTAL_CHECKS++))
 if grep -q "read -r -s -n 1 -t 1" lib/core/ui.sh; then
-    echo -e "${GREEN}  ✓ Keyboard timeout properly configured (1s)${NC}"
+    echo -e "${GREEN}  ${ICON_SUCCESS} Keyboard timeout configured${NC}"
     ((OPTIMIZATION_SCORE++))
 else
-    echo -e "${YELLOW}  ⚠ Keyboard timeout may be misconfigured${NC}"
+    echo -e "${YELLOW}  ${ICON_WARNING} Keyboard timeout may be misconfigured${NC}"
 fi
 
-# Check 2: Single-pass drain_pending_input
 ((TOTAL_CHECKS++))
 DRAIN_PASSES=$(grep -c "while IFS= read -r -s -n 1" lib/core/ui.sh 2> /dev/null || true)
 DRAIN_PASSES=${DRAIN_PASSES:-0}
 if [[ $DRAIN_PASSES -eq 1 ]]; then
-    echo -e "${GREEN}  ✓ drain_pending_input optimized (single-pass)${NC}"
+    echo -e "${GREEN}  ${ICON_SUCCESS} drain_pending_input optimized${NC}"
     ((OPTIMIZATION_SCORE++))
 else
-    echo -e "${YELLOW}  ⚠ drain_pending_input has multiple passes${NC}"
+    echo -e "${YELLOW}  ${ICON_WARNING} drain_pending_input has multiple passes${NC}"
 fi
 
-# Check 3: Log rotation once per session
 ((TOTAL_CHECKS++))
 if grep -q "rotate_log_once" lib/core/log.sh; then
-    echo -e "${GREEN}  ✓ Log rotation optimized (once per session)${NC}"
+    echo -e "${GREEN}  ${ICON_SUCCESS} Log rotation optimized${NC}"
     ((OPTIMIZATION_SCORE++))
 else
-    echo -e "${YELLOW}  ⚠ Log rotation not optimized${NC}"
+    echo -e "${YELLOW}  ${ICON_WARNING} Log rotation not optimized${NC}"
 fi
 
-# Check 4: Simplified cache validation
 ((TOTAL_CHECKS++))
 if ! grep -q "cache_meta\|cache_dir_mtime" bin/uninstall.sh; then
-    echo -e "${GREEN}  ✓ Cache validation simplified${NC}"
+    echo -e "${GREEN}  ${ICON_SUCCESS} Cache validation simplified${NC}"
     ((OPTIMIZATION_SCORE++))
 else
-    echo -e "${YELLOW}  ⚠ Cache still uses redundant metadata${NC}"
+    echo -e "${YELLOW}  ${ICON_WARNING} Cache still uses redundant metadata${NC}"
 fi
 
-# Check 5: Stricter path validation
 ((TOTAL_CHECKS++))
 if grep -q "Consecutive slashes" bin/clean.sh; then
-    echo -e "${GREEN}  ✓ Path validation enhanced${NC}"
+    echo -e "${GREEN}  ${ICON_SUCCESS} Path validation enhanced${NC}"
     ((OPTIMIZATION_SCORE++))
 else
-    echo -e "${YELLOW}  ⚠ Path validation not enhanced${NC}"
+    echo -e "${YELLOW}  ${ICON_WARNING} Path validation not enhanced${NC}"
 fi
 
 echo -e "${BLUE}  Optimization score: $OPTIMIZATION_SCORE/$TOTAL_CHECKS${NC}\n"
 
-# Summary
-echo -e "${GREEN}=== All Checks Completed ===${NC}"
+echo -e "${GREEN}=== Checks Completed ===${NC}"
 if [[ $OPTIMIZATION_SCORE -eq $TOTAL_CHECKS ]]; then
-    echo -e "${GREEN}✓ Code quality checks passed!${NC}"
-    echo -e "${GREEN}✓ All optimizations applied!${NC}"
+    echo -e "${GREEN}${ICON_SUCCESS} All optimizations applied${NC}"
 else
-    echo -e "${YELLOW}⚠ Code quality checks passed, but some optimizations missing${NC}"
+    echo -e "${YELLOW}${ICON_WARNING} Some optimizations missing${NC}"
 fi

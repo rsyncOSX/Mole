@@ -24,7 +24,6 @@ create_fake_utils() {
     local dir="$1"
     mkdir -p "$dir"
 
-    # Fake sudo
     cat > "$dir/sudo" <<'SCRIPT'
 #!/usr/bin/env bash
 if [[ "$1" == "-n" || "$1" == "-v" ]]; then
@@ -34,7 +33,6 @@ exec "$@"
 SCRIPT
     chmod +x "$dir/sudo"
 
-    # Fake bioutil
     cat > "$dir/bioutil" <<'SCRIPT'
 #!/usr/bin/env bash
 if [[ "$1" == "-r" ]]; then
@@ -49,7 +47,6 @@ SCRIPT
 @test "touchid status reflects pam file contents" {
     pam_file="$HOME/pam_test"
     cat > "$pam_file" <<'EOF'
-# comment
 auth       sufficient     pam_opendirectory.so
 EOF
 
@@ -69,7 +66,6 @@ EOF
 @test "enable_touchid inserts pam_tid line in pam file" {
     pam_file="$HOME/pam_enable"
     cat > "$pam_file" <<'EOF'
-# test pam
 auth       sufficient     pam_opendirectory.so
 EOF
 

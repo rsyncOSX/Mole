@@ -17,10 +17,7 @@ clear_screen() { printf '\033[2J\033[H'; }
 hide_cursor() { [[ -t 1 ]] && printf '\033[?25l' >&2 || true; }
 show_cursor() { [[ -t 1 ]] && printf '\033[?25h' >&2 || true; }
 
-# Calculate display width of a string (CJK characters count as 2)
-# Args: $1 - string to measure
-# Returns: display width
-# Note: Works correctly even when LC_ALL=C is set
+# Calculate display width (CJK characters count as 2)
 get_display_width() {
     local str="$1"
 
@@ -63,11 +60,26 @@ get_display_width() {
     local padding=$((extra_bytes / 2))
     width=$((char_count + padding))
 
+    # Adjust for zero-width joiners and emoji variation selectors (common in filenames/emojis)
+    # These characters add bytes but no visible width; subtract their count if present.
+    local zwj=$'\u200d'  # zero-width joiner
+    local vs16=$'\ufe0f' # emoji variation selector
+    local zero_width=0
+
+    local without_zwj=${str//$zwj/}
+    zero_width=$((zero_width + (char_count - ${#without_zwj})))
+
+    local without_vs=${str//$vs16/}
+    zero_width=$((zero_width + (char_count - ${#without_vs})))
+
+    if ((zero_width > 0 && width > zero_width)); then
+        width=$((width - zero_width))
+    fi
+
     echo "$width"
 }
 
-# Truncate string by display width (handles CJK correctly)
-# Args: $1 - string, $2 - max display width
+# Truncate string by display width (handles CJK)
 truncate_by_display_width() {
     local str="$1"
     local max_width="$2"
@@ -140,7 +152,7 @@ truncate_by_display_width() {
     echo "${truncated}..."
 }
 
-# Keyboard input - read single keypress
+# Read single keyboard input
 read_key() {
     local key rest read_status
     IFS= read -r -s -n 1 key
@@ -222,7 +234,7 @@ drain_pending_input() {
     done
 }
 
-# Menu display
+# Format menu option display
 show_menu_option() {
     local number="$1"
     local text="$2"
@@ -235,53 +247,77 @@ show_menu_option() {
     fi
 }
 
-# Inline spinner
+# Background spinner implementation
 INLINE_SPINNER_PID=""
+INLINE_SPINNER_STOP_FILE=""
+
 start_inline_spinner() {
     stop_inline_spinner 2> /dev/null || true
     local message="$1"
 
     if [[ -t 1 ]]; then
+        # Create unique stop flag file for this spinner instance
+        INLINE_SPINNER_STOP_FILE="${TMPDIR:-/tmp}/mole_spinner_$$_$RANDOM.stop"
+
         (
-            trap 'exit 0' TERM INT EXIT
+            local stop_file="$INLINE_SPINNER_STOP_FILE"
             local chars
             chars="$(mo_spinner_chars)"
             [[ -z "$chars" ]] && chars="|/-\\"
             local i=0
-            while true; do
+
+            # Cooperative exit: check for stop file instead of relying on signals
+            while [[ ! -f "$stop_file" ]]; do
                 local c="${chars:$((i % ${#chars})):1}"
                 # Output to stderr to avoid interfering with stdout
-                printf "\r${MOLE_SPINNER_PREFIX:-}${BLUE}%s${NC} %s" "$c" "$message" >&2 || exit 0
+                printf "\r${MOLE_SPINNER_PREFIX:-}${BLUE}%s${NC} %s" "$c" "$message" >&2 || break
                 ((i++))
                 sleep 0.1
             done
+
+            # Clean up stop file before exiting
+            rm -f "$stop_file" 2> /dev/null || true
+            exit 0
         ) &
         INLINE_SPINNER_PID=$!
         disown 2> /dev/null || true
     else
-        echo -n "  ${BLUE}|${NC} $message" >&2
+        echo -n "  ${BLUE}|${NC} $message" >&2 || true
     fi
 }
 
 stop_inline_spinner() {
     if [[ -n "$INLINE_SPINNER_PID" ]]; then
-        # Try graceful TERM first, then force KILL if needed
-        if kill -0 "$INLINE_SPINNER_PID" 2> /dev/null; then
-            kill -TERM "$INLINE_SPINNER_PID" 2> /dev/null || true
-            sleep 0.05 2> /dev/null || true
-            # Force kill if still running
-            if kill -0 "$INLINE_SPINNER_PID" 2> /dev/null; then
-                kill -KILL "$INLINE_SPINNER_PID" 2> /dev/null || true
-            fi
+        # Cooperative stop: create stop file to signal spinner to exit
+        if [[ -n "$INLINE_SPINNER_STOP_FILE" ]]; then
+            touch "$INLINE_SPINNER_STOP_FILE" 2> /dev/null || true
         fi
+
+        # Wait briefly for cooperative exit
+        local wait_count=0
+        while kill -0 "$INLINE_SPINNER_PID" 2> /dev/null && [[ $wait_count -lt 5 ]]; do
+            sleep 0.05 2> /dev/null || true
+            ((wait_count++))
+        done
+
+        # Only use SIGKILL as last resort if process is stuck
+        if kill -0 "$INLINE_SPINNER_PID" 2> /dev/null; then
+            kill -KILL "$INLINE_SPINNER_PID" 2> /dev/null || true
+        fi
+
         wait "$INLINE_SPINNER_PID" 2> /dev/null || true
+
+        # Cleanup
+        rm -f "$INLINE_SPINNER_STOP_FILE" 2> /dev/null || true
         INLINE_SPINNER_PID=""
+        INLINE_SPINNER_STOP_FILE=""
+
         # Clear the line - use \033[2K to clear entire line, not just to end
-        [[ -t 1 ]] && printf "\r\033[2K" >&2
+        [[ -t 1 ]] && printf "\r\033[2K" >&2 || true
     fi
 }
 
-# Wrapper for running commands with spinner
+# Run command with a terminal spinner
 with_spinner() {
     local msg="$1"
     shift || true
@@ -302,9 +338,7 @@ mo_spinner_chars() {
     printf "%s" "$chars"
 }
 
-# Format last used time for display
-# Args: $1 = last used string (e.g., "3 days ago", "Today", "Never")
-# Returns: Compact version (e.g., "3d ago", "Today", "Never")
+# Format relative time for compact display (e.g., 3d ago)
 format_last_used_summary() {
     local value="$1"
 
@@ -340,4 +374,61 @@ format_last_used_summary() {
         return 0
     fi
     echo "$value"
+}
+
+# Check if terminal has Full Disk Access
+# Returns 0 if FDA is granted, 1 if denied, 2 if unknown
+has_full_disk_access() {
+    # Cache the result to avoid repeated checks
+    if [[ -n "${MOLE_HAS_FDA:-}" ]]; then
+        if [[ "$MOLE_HAS_FDA" == "1" ]]; then
+            return 0
+        elif [[ "$MOLE_HAS_FDA" == "unknown" ]]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # Test access to protected directories that require FDA
+    # Strategy: Try to access directories that are commonly protected
+    # If ANY of them are accessible, we likely have FDA
+    # If ALL fail, we definitely don't have FDA
+    local -a protected_dirs=(
+        "$HOME/Library/Safari/LocalStorage"
+        "$HOME/Library/Mail/V10"
+        "$HOME/Library/Messages/chat.db"
+    )
+
+    local accessible_count=0
+    local tested_count=0
+
+    for test_path in "${protected_dirs[@]}"; do
+        # Only test when the protected path exists
+        if [[ -e "$test_path" ]]; then
+            tested_count=$((tested_count + 1))
+            # Try to stat the ACTUAL protected path - this requires FDA
+            if stat "$test_path" > /dev/null 2>&1; then
+                accessible_count=$((accessible_count + 1))
+            fi
+        fi
+    done
+
+    # Three possible outcomes:
+    # 1. tested_count = 0: Can't determine (test paths don't exist) → unknown
+    # 2. tested_count > 0 && accessible_count > 0: Has FDA → yes
+    # 3. tested_count > 0 && accessible_count = 0: No FDA → no
+    if [[ $tested_count -eq 0 ]]; then
+        # Can't determine - test paths don't exist, treat as unknown
+        export MOLE_HAS_FDA="unknown"
+        return 2
+    elif [[ $accessible_count -gt 0 ]]; then
+        # At least one path is accessible → has FDA
+        export MOLE_HAS_FDA=1
+        return 0
+    else
+        # Tested paths exist but not accessible → no FDA
+        export MOLE_HAS_FDA=0
+        return 1
+    fi
 }

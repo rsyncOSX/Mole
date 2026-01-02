@@ -55,9 +55,7 @@ setup() {
     while IFS= read -r line; do
         lines+=("$line")
     done < "$WHITELIST_PATH"
-    # Header is at least two lines (comments), plus two unique patterns
     [ "${#lines[@]}" -ge 4 ]
-    # Ensure duplicate was not written twice
     occurrences=$(grep -c "$HOME/.cache/foo" "$WHITELIST_PATH")
     [ "$occurrences" -eq 1 ]
 }

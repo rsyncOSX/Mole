@@ -6,35 +6,35 @@ const (
 	maxEntries            = 30
 	maxLargeFiles         = 30
 	barWidth              = 24
-	minLargeFileSize      = 100 << 20          // 100 MB
-	defaultViewport       = 12                 // Default viewport when terminal height is unknown
-	overviewCacheTTL      = 7 * 24 * time.Hour // 7 days
+	minLargeFileSize      = 100 << 20
+	defaultViewport       = 12
+	overviewCacheTTL      = 7 * 24 * time.Hour
 	overviewCacheFile     = "overview_sizes.json"
-	duTimeout             = 30 * time.Second // Fail faster to fallback to concurrent scan
+	duTimeout             = 30 * time.Second
 	mdlsTimeout           = 5 * time.Second
-	maxConcurrentOverview = 8                // Increased parallel overview scans
-	batchUpdateSize       = 100              // Batch atomic updates every N items
-	cacheModTimeGrace     = 30 * time.Minute // Ignore minor directory mtime bumps
+	maxConcurrentOverview = 8
+	batchUpdateSize       = 100
+	cacheModTimeGrace     = 30 * time.Minute
 
-	// Worker pool configuration
-	minWorkers         = 16               // Safe baseline for older machines
-	maxWorkers         = 64               // Cap at 64 to avoid OS resource contention
-	cpuMultiplier      = 4                // Balanced CPU usage
-	maxDirWorkers      = 32               // Limit concurrent subdirectory scans
-	openCommandTimeout = 10 * time.Second // Timeout for open/reveal commands
+	// Worker pool limits.
+	minWorkers         = 16
+	maxWorkers         = 64
+	cpuMultiplier      = 4
+	maxDirWorkers      = 32
+	openCommandTimeout = 10 * time.Second
 )
 
 var foldDirs = map[string]bool{
-	// Version control
+	// VCS.
 	".git": true,
 	".svn": true,
 	".hg":  true,
 
-	// JavaScript/Node
+	// JavaScript/Node.
 	"node_modules":                  true,
 	".npm":                          true,
-	"_npx":                          true, // ~/.npm/_npx global cache
-	"_cacache":                      true, // ~/.npm/_cacache
+	"_npx":                          true,
+	"_cacache":                      true,
 	"_logs":                         true,
 	"_locks":                        true,
 	"_quick":                        true,
@@ -56,7 +56,7 @@ var foldDirs = map[string]bool{
 	".bun":                          true,
 	".deno":                         true,
 
-	// Python
+	// Python.
 	"__pycache__":   true,
 	".pytest_cache": true,
 	".mypy_cache":   true,
@@ -73,7 +73,7 @@ var foldDirs = map[string]bool{
 	".pip":          true,
 	".pipx":         true,
 
-	// Ruby/Go/PHP (vendor), Java/Kotlin/Scala/Rust (target)
+	// Ruby/Go/PHP (vendor), Java/Kotlin/Scala/Rust (target).
 	"vendor":        true,
 	".bundle":       true,
 	"gems":          true,
@@ -88,20 +88,20 @@ var foldDirs = map[string]bool{
 	".composer":     true,
 	".cargo":        true,
 
-	// Build outputs
+	// Build outputs.
 	"build":     true,
 	"dist":      true,
 	".output":   true,
 	"coverage":  true,
 	".coverage": true,
 
-	// IDE
+	// IDE.
 	".idea":   true,
 	".vscode": true,
 	".vs":     true,
 	".fleet":  true,
 
-	// Cache directories
+	// Cache directories.
 	".cache":                  true,
 	"__MACOSX":                true,
 	".DS_Store":               true,
@@ -121,36 +121,37 @@ var foldDirs = map[string]bool{
 	".sdkman":                 true,
 	".nvm":                    true,
 
-	// macOS specific
+	// macOS.
 	"Application Scripts":     true,
 	"Saved Application State": true,
 
-	// iCloud
+	// iCloud.
 	"Mobile Documents": true,
 
-	// Docker & Containers
+	// Containers.
 	".docker":     true,
 	".containerd": true,
 
-	// Mobile development
+	// Mobile development.
 	"Pods":        true,
 	"DerivedData": true,
 	".build":      true,
 	"xcuserdata":  true,
 	"Carthage":    true,
+	".dart_tool":  true,
 
-	// Web frameworks
+	// Web frameworks.
 	".angular":    true,
 	".svelte-kit": true,
 	".astro":      true,
 	".solid":      true,
 
-	// Databases
+	// Databases.
 	".mysql":    true,
 	".postgres": true,
 	"mongodb":   true,
 
-	// Other
+	// Other.
 	".terraform": true,
 	".vagrant":   true,
 	"tmp":        true,
@@ -169,22 +170,22 @@ var skipSystemDirs = map[string]bool{
 	"bin":                     true,
 	"etc":                     true,
 	"var":                     true,
-	"opt":                     false, // User might want to specific check opt
-	"usr":                     false, // User might check usr
-	"Volumes":                 true,  // Skip external drives by default when scanning root
-	"Network":                 true,  // Skip network mounts
+	"opt":                     false,
+	"usr":                     false,
+	"Volumes":                 true,
+	"Network":                 true,
 	".vol":                    true,
 	".Spotlight-V100":         true,
 	".fseventsd":              true,
 	".DocumentRevisions-V100": true,
 	".TemporaryItems":         true,
-	".MobileBackups":          true, // Time Machine local snapshots
+	".MobileBackups":          true,
 }
 
 var defaultSkipDirs = map[string]bool{
-	"nfs":         true, // Network File System
-	"PHD":         true, // Parallels Shared Folders / Home Directories
-	"Permissions": true, // Common macOS deny folder
+	"nfs":         true,
+	"PHD":         true,
+	"Permissions": true,
 }
 
 var skipExtensions = map[string]bool{

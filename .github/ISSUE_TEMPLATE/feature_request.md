@@ -8,7 +8,7 @@ assignees: ''
 
 ## Feature description
 
-A clear and concise description of the feature you'd like to see.
+A clear and concise description of the feature you'd like to see. We suggest using English for better global understanding.
 
 ## Use case
 

@@ -76,9 +76,9 @@ ask_for_updates() {
         echo -e "$item"
     done
     echo ""
-
-    # If Mole has updates, offer to update it
+    # If only Mole is relevant for automation, prompt just for Mole
     if [[ "${MOLE_UPDATE_AVAILABLE:-}" == "true" ]]; then
+        echo ""
         echo -ne "${YELLOW}Update Mole now?${NC} ${GRAY}Enter confirm / ESC cancel${NC}: "
 
         local key
@@ -92,55 +92,33 @@ ask_for_updates() {
             echo "yes"
             echo ""
             return 0
-        else
-            echo "skip"
-            echo ""
-            return 1
         fi
     fi
 
-    # For other updates, just show instructions
-    # (Mole update check above handles the return 0 case, so we only get here if no Mole update)
-    if [[ "${BREW_OUTDATED_COUNT:-0}" -gt 0 ]]; then
-        echo -e "${YELLOW}Tip:${NC} Run ${GREEN}brew upgrade${NC} to update Homebrew packages"
-    fi
-    if [[ "${APPSTORE_UPDATE_COUNT:-0}" -gt 0 ]]; then
-        echo -e "${YELLOW}Tip:${NC} Open ${BLUE}App Store${NC} to update apps"
-    fi
-    if [[ "${MACOS_UPDATE_AVAILABLE:-}" == "true" ]]; then
-        echo -e "${YELLOW}Tip:${NC} Open ${BLUE}System Settings${NC} to update macOS"
-    fi
     echo ""
+    echo -e "${YELLOW}Tip:${NC} Homebrew: brew upgrade / brew upgrade --cask"
+    echo -e "${YELLOW}Tip:${NC} App Store: open App Store → Updates"
+    echo -e "${YELLOW}Tip:${NC} macOS: System Settings → General → Software Update"
     return 1
 }
 
 # Perform all pending updates
 # Returns: 0 if all succeeded, 1 if some failed
 perform_updates() {
-    # Only handle Mole updates here
-    # Other updates are now informational-only in ask_for_updates
-
+    # Only handle Mole updates here; Homebrew/App Store/macOS are manual (tips shown in ask_for_updates)
     local updated_count=0
+    local total_count=0
 
-    # Update Mole
     if [[ -n "${MOLE_UPDATE_AVAILABLE:-}" && "${MOLE_UPDATE_AVAILABLE}" == "true" ]]; then
         echo -e "${BLUE}Updating Mole...${NC}"
-        # Try to find mole executable
         local mole_bin="${SCRIPT_DIR}/../../mole"
         [[ ! -f "$mole_bin" ]] && mole_bin=$(command -v mole 2> /dev/null || echo "")
 
         if [[ -x "$mole_bin" ]]; then
-            # We use exec here or just run it?
-            # If we run 'mole update', it replaces the script.
-            # Since this function is part of a sourced script, replacing the file on disk is risky while running.
-            # However, 'mole update' script usually handles this by downloading to a temp file and moving it.
-            # But the shell might not like the file changing under it.
-            # The original code ran it this way, so we assume it's safe enough or handled by mole update implementation.
-
             if "$mole_bin" update 2>&1 | grep -qE "(Updated|latest version)"; then
                 echo -e "${GREEN}✓${NC} Mole updated"
                 reset_mole_cache
-                updated_count=1
+                ((updated_count++))
             else
                 echo -e "${RED}✗${NC} Mole update failed"
             fi
@@ -148,11 +126,17 @@ perform_updates() {
             echo -e "${RED}✗${NC} Mole executable not found"
         fi
         echo ""
+        total_count=1
     fi
 
-    if [[ $updated_count -gt 0 ]]; then
+    if [[ $total_count -eq 0 ]]; then
+        echo -e "${GRAY}No updates to perform${NC}"
+        return 0
+    elif [[ $updated_count -eq $total_count ]]; then
+        echo -e "${GREEN}All updates completed (${updated_count}/${total_count})${NC}"
         return 0
     else
+        echo -e "${RED}Update failed (${updated_count}/${total_count})${NC}"
         return 1
     fi
 }

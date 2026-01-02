@@ -26,66 +26,46 @@ setup() {
     mkdir -p "$HOME"
 }
 
-@test "format.sh --check validates script formatting" {
-    if ! command -v shfmt > /dev/null 2>&1; then
-        skip "shfmt not installed"
-    fi
-
-    run "$PROJECT_ROOT/scripts/format.sh" --check
-    # May pass or fail depending on formatting, but should not error
-    [[ "$status" -eq 0 || "$status" -eq 1 ]]
-}
-
-@test "format.sh --help shows usage information" {
-    run "$PROJECT_ROOT/scripts/format.sh" --help
+@test "check.sh --help shows usage information" {
+    run "$PROJECT_ROOT/scripts/check.sh" --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"Usage"* ]]
+    [[ "$output" == *"--format"* ]]
+    [[ "$output" == *"--no-format"* ]]
 }
 
 @test "check.sh script exists and is valid" {
-    # Don't actually run check.sh in tests - it would recursively run all bats tests!
-    # Just verify the script is valid bash
     [ -f "$PROJECT_ROOT/scripts/check.sh" ]
     [ -x "$PROJECT_ROOT/scripts/check.sh" ]
 
-    # Verify it has the expected structure
-    run bash -c "grep -q 'Quality Checks' '$PROJECT_ROOT/scripts/check.sh'"
+    run bash -c "grep -q 'Mole Check' '$PROJECT_ROOT/scripts/check.sh'"
     [ "$status" -eq 0 ]
 }
 
-@test "build-analyze.sh detects missing Go toolchain" {
-    if command -v go > /dev/null 2>&1; then
-        # Go is installed, verify script doesn't error out
-        # (Don't actually build - too slow)
-        run bash -c "grep -q 'go build' '$PROJECT_ROOT/scripts/build-analyze.sh'"
-        [ "$status" -eq 0 ]
-    else
-        # Go is missing, verify proper error handling
-        run "$PROJECT_ROOT/scripts/build-analyze.sh"
-        [ "$status" -ne 0 ]
-        [[ "$output" == *"Go not installed"* ]]
-    fi
+@test "test.sh script exists and is valid" {
+    [ -f "$PROJECT_ROOT/scripts/test.sh" ]
+    [ -x "$PROJECT_ROOT/scripts/test.sh" ]
+
+    run bash -c "grep -q 'Mole Test Runner' '$PROJECT_ROOT/scripts/test.sh'"
+    [ "$status" -eq 0 ]
 }
 
-@test "build-analyze.sh has version info support" {
-    # Don't actually build in tests - too slow (10-30 seconds)
-    # Just verify the script contains version info logic
-    run bash -c "grep -q 'VERSION=' '$PROJECT_ROOT/scripts/build-analyze.sh'"
+@test "test.sh includes test lint step" {
+    run bash -c "grep -q 'Test script lint' '$PROJECT_ROOT/scripts/test.sh'"
     [ "$status" -eq 0 ]
-    run bash -c "grep -q 'BUILD_TIME=' '$PROJECT_ROOT/scripts/build-analyze.sh'"
+}
+
+@test "Makefile has build target for Go binaries" {
+    run bash -c "grep -q 'go build' '$PROJECT_ROOT/Makefile'"
     [ "$status" -eq 0 ]
 }
 
 @test "setup-quick-launchers.sh has detect_mo function" {
-    # Don't actually run the script - it opens Raycast and creates files
-    # Just verify it contains the detection logic
     run bash -c "grep -q 'detect_mo()' '$PROJECT_ROOT/scripts/setup-quick-launchers.sh'"
     [ "$status" -eq 0 ]
 }
 
 @test "setup-quick-launchers.sh has Raycast script generation" {
-    # Don't actually run the script - it opens Raycast
-    # Just verify it contains Raycast workflow creation logic
     run bash -c "grep -q 'create_raycast_commands' '$PROJECT_ROOT/scripts/setup-quick-launchers.sh'"
     [ "$status" -eq 0 ]
     run bash -c "grep -q 'write_raycast_script' '$PROJECT_ROOT/scripts/setup-quick-launchers.sh'"

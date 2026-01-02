@@ -18,7 +18,16 @@ log_step() { echo -e "${BLUE}${ICON_STEP}${NC} $1"; }
 log_success() { echo -e "${GREEN}${ICON_SUCCESS}${NC} $1"; }
 log_warn() { echo -e "${YELLOW}${ICON_WARN}${NC} $1"; }
 log_error() { echo -e "${RED}${ICON_ERR}${NC} $1"; }
-
+log_header() { echo -e "\n${BLUE}==== $1 ====${NC}\n"; }
+is_interactive() { [[ -t 1 && -r /dev/tty ]]; }
+prompt_enter() {
+    local prompt="$1"
+    if is_interactive; then
+        read -r -p "$prompt" < /dev/tty || true
+    else
+        echo "$prompt"
+    fi
+}
 detect_mo() {
     if command -v mo > /dev/null 2>&1; then
         command -v mo
@@ -223,42 +232,44 @@ EOF
 create_raycast_commands() {
     local mo_bin="$1"
     local default_dir="$HOME/Library/Application Support/Raycast/script-commands"
-    local alt_dir="$HOME/Documents/Raycast/Scripts"
-    local dirs=()
-
-    if [[ -d "$default_dir" ]]; then
-        dirs+=("$default_dir")
-    fi
-    if [[ -d "$alt_dir" ]]; then
-        dirs+=("$alt_dir")
-    fi
-    if [[ ${#dirs[@]} -eq 0 ]]; then
-        dirs+=("$default_dir")
-    fi
+    local dir="$default_dir"
 
     log_step "Installing Raycast commands..."
-    for dir in "${dirs[@]}"; do
-        mkdir -p "$dir"
-        write_raycast_script "$dir/mole-clean.sh" "clean" "$mo_bin" "clean"
-        write_raycast_script "$dir/mole-uninstall.sh" "uninstall" "$mo_bin" "uninstall"
-        write_raycast_script "$dir/mole-optimize.sh" "optimize" "$mo_bin" "optimize"
-        write_raycast_script "$dir/mole-analyze.sh" "analyze" "$mo_bin" "analyze"
-        write_raycast_script "$dir/mole-status.sh" "status" "$mo_bin" "status"
-        log_success "Scripts ready in: $dir"
-    done
+    mkdir -p "$dir"
+    write_raycast_script "$dir/mole-clean.sh" "clean" "$mo_bin" "clean"
+    write_raycast_script "$dir/mole-uninstall.sh" "uninstall" "$mo_bin" "uninstall"
+    write_raycast_script "$dir/mole-optimize.sh" "optimize" "$mo_bin" "optimize"
+    write_raycast_script "$dir/mole-analyze.sh" "analyze" "$mo_bin" "analyze"
+    write_raycast_script "$dir/mole-status.sh" "status" "$mo_bin" "status"
+    log_success "Scripts ready in: $dir"
 
-    echo ""
-    if open "raycast://extensions/script-commands" > /dev/null 2>&1; then
-        log_step "Raycast settings opened."
+    log_header "Raycast Configuration"
+    if command -v open > /dev/null 2>&1; then
+        if open "raycast://extensions/raycast/raycast-settings/extensions" > /dev/null 2>&1; then
+            log_step "Raycast settings opened."
+        else
+            log_warn "Could not auto-open Raycast."
+        fi
     else
-        log_warn "Could not auto-open Raycast."
+        log_warn "open command not available; please open Raycast manually."
     fi
 
-    echo ""
-    echo "Next steps to activate Raycast commands:"
-    echo "  1. Open Raycast (⌘ Space)"
-    echo "  2. Search for 'Reload Script Directories'"
-    echo "  3. Press Enter to load new commands"
+    echo "If Raycast asks to add a Script Directory, use:"
+    echo "  $dir"
+
+    if is_interactive; then
+        log_header "Finalizing Setup"
+        prompt_enter "Press [Enter] to reload script directories in Raycast..."
+        if command -v open > /dev/null 2>&1 && open "raycast://extensions/raycast/raycast/reload-script-directories" > /dev/null 2>&1; then
+            log_step "Raycast script directories reloaded."
+        else
+            log_warn "Could not auto-reload Raycast script directories."
+        fi
+
+        log_success "Raycast setup complete!"
+    else
+        log_warn "Non-interactive mode; skip Raycast reload. Please run 'Reload Script Directories' in Raycast."
+    fi
 }
 
 uuid() {
@@ -277,7 +288,6 @@ create_alfred_workflow() {
     local workflows_dir="$prefs_dir/workflows"
 
     if [[ ! -d "$workflows_dir" ]]; then
-        log_warn "Alfred preferences not found at $workflows_dir. Skipping Alfred workflow."
         return
     fi
 

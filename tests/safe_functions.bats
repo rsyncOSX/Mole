@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# Tests for safe_* functions in lib/core/common.sh
 
 setup_file() {
     PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
@@ -31,7 +30,6 @@ teardown() {
     rm -rf "$TEST_DIR"
 }
 
-# Test validate_path_for_deletion
 @test "validate_path_for_deletion rejects empty path" {
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; validate_path_for_deletion ''"
     [ "$status" -eq 1 ]
@@ -63,7 +61,6 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-# Test safe_remove
 @test "safe_remove validates path before deletion" {
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; safe_remove '/System/test' 2>&1"
     [ "$status" -eq 1 ]
@@ -94,14 +91,11 @@ teardown() {
 }
 
 @test "safe_remove in silent mode suppresses error output" {
-    # Try to remove system directory in silent mode
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; safe_remove '/System/test' true 2>&1"
     [ "$status" -eq 1 ]
-    # Should not output error in silent mode
 }
 
 
-# Test safe_find_delete
 @test "safe_find_delete validates base directory" {
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; safe_find_delete '/nonexistent' '*.tmp' 7 'f' 2>&1"
     [ "$status" -eq 1 ]
@@ -127,21 +121,18 @@ teardown() {
 }
 
 @test "safe_find_delete deletes old files" {
-    # Create test files with different ages
     local old_file="$TEST_DIR/old.tmp"
     local new_file="$TEST_DIR/new.tmp"
 
     touch "$old_file"
     touch "$new_file"
 
-    # Make old_file 8 days old (requires touch -t)
     touch -t "$(date -v-8d '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '8 days ago' '+%Y%m%d%H%M.%S')" "$old_file" 2>/dev/null || true
 
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; safe_find_delete '$TEST_DIR' '*.tmp' 7 'f'"
     [ "$status" -eq 0 ]
 }
 
-# Test MOLE constants are defined
 @test "MOLE_* constants are defined" {
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; echo \$MOLE_TEMP_FILE_AGE_DAYS"
     [ "$status" -eq 0 ]

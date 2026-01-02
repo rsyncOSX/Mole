@@ -14,24 +14,33 @@ import (
 	"github.com/shirou/gopsutil/v3/host"
 )
 
+var (
+	// Cache for heavy system_profiler output.
+	lastPowerAt   time.Time
+	cachedPower   string
+	powerCacheTTL = 30 * time.Second
+)
+
 func collectBatteries() (batts []BatteryStatus, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// Swallow panics from platform-specific battery probes to keep the UI alive.
+			// Swallow panics to keep UI alive.
 			err = fmt.Errorf("battery collection failed: %v", r)
 		}
 	}()
 
-	// macOS: pmset
+	// macOS: pmset for real-time percentage/status.
 	if runtime.GOOS == "darwin" && commandExists("pmset") {
 		if out, err := runCmd(context.Background(), "pmset", "-g", "batt"); err == nil {
-			if batts := parsePMSet(out); len(batts) > 0 {
+			// Health/cycles from cached system_profiler.
+			health, cycles := getCachedPowerData()
+			if batts := parsePMSet(out, health, cycles); len(batts) > 0 {
 				return batts, nil
 			}
 		}
 	}
 
-	// Linux: /sys/class/power_supply
+	// Linux: /sys/class/power_supply.
 	matches, _ := filepath.Glob("/sys/class/power_supply/BAT*/capacity")
 	for _, capFile := range matches {
 		statusFile := filepath.Join(filepath.Dir(capFile), "status")
@@ -58,15 +67,14 @@ func collectBatteries() (batts []BatteryStatus, err error) {
 	return nil, errors.New("no battery data found")
 }
 
-func parsePMSet(raw string) []BatteryStatus {
+func parsePMSet(raw string, health string, cycles int) []BatteryStatus {
 	lines := strings.Split(raw, "\n")
 	var out []BatteryStatus
 	var timeLeft string
 
 	for _, line := range lines {
-		// Check for time remaining
+		// Time remaining.
 		if strings.Contains(line, "remaining") {
-			// Extract time like "1:30 remaining"
 			parts := strings.Fields(line)
 			for i, p := range parts {
 				if p == "remaining" && i > 0 {
@@ -101,9 +109,6 @@ func parsePMSet(raw string) []BatteryStatus {
 			continue
 		}
 
-		// Get battery health and cycle count
-		health, cycles := getBatteryHealth()
-
 		out = append(out, BatteryStatus{
 			Percent:    percent,
 			Status:     status,
@@ -115,38 +120,49 @@ func parsePMSet(raw string) []BatteryStatus {
 	return out
 }
 
-func getBatteryHealth() (string, int) {
-	if runtime.GOOS != "darwin" {
+// getCachedPowerData returns condition and cycles from cached system_profiler.
+func getCachedPowerData() (health string, cycles int) {
+	out := getSystemPowerOutput()
+	if out == "" {
 		return "", 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	out, err := runCmd(ctx, "system_profiler", "SPPowerDataType")
-	if err != nil {
-		return "", 0
-	}
-
-	var health string
-	var cycles int
 
 	lines := strings.Split(out, "\n")
 	for _, line := range lines {
 		lower := strings.ToLower(line)
 		if strings.Contains(lower, "cycle count") {
-			parts := strings.Split(line, ":")
-			if len(parts) == 2 {
-				cycles, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+			if _, after, found := strings.Cut(line, ":"); found {
+				cycles, _ = strconv.Atoi(strings.TrimSpace(after))
 			}
 		}
 		if strings.Contains(lower, "condition") {
-			parts := strings.Split(line, ":")
-			if len(parts) == 2 {
-				health = strings.TrimSpace(parts[1])
+			if _, after, found := strings.Cut(line, ":"); found {
+				health = strings.TrimSpace(after)
 			}
 		}
 	}
 	return health, cycles
+}
+
+func getSystemPowerOutput() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+
+	now := time.Now()
+	if cachedPower != "" && now.Sub(lastPowerAt) < powerCacheTTL {
+		return cachedPower
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	out, err := runCmd(ctx, "system_profiler", "SPPowerDataType")
+	if err == nil {
+		cachedPower = out
+		lastPowerAt = now
+	}
+	return cachedPower
 }
 
 func collectThermal() ThermalStatus {
@@ -156,47 +172,85 @@ func collectThermal() ThermalStatus {
 
 	var thermal ThermalStatus
 
-	// Get fan info from system_profiler
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	out, err := runCmd(ctx, "system_profiler", "SPPowerDataType")
-	if err == nil {
+	// Fan info from cached system_profiler.
+	out := getSystemPowerOutput()
+	if out != "" {
 		lines := strings.Split(out, "\n")
 		for _, line := range lines {
 			lower := strings.ToLower(line)
 			if strings.Contains(lower, "fan") && strings.Contains(lower, "speed") {
-				parts := strings.Split(line, ":")
-				if len(parts) == 2 {
-					// Extract number from string like "1200 RPM"
-					numStr := strings.TrimSpace(parts[1])
-					numStr = strings.Split(numStr, " ")[0]
+				if _, after, found := strings.Cut(line, ":"); found {
+					numStr := strings.TrimSpace(after)
+					numStr, _, _ = strings.Cut(numStr, " ")
 					thermal.FanSpeed, _ = strconv.Atoi(numStr)
 				}
 			}
 		}
 	}
 
-	// 1. Try ioreg battery temperature (simple, no sudo needed)
-	ctxIoreg, cancelIoreg := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancelIoreg()
-	if out, err := runCmd(ctxIoreg, "sh", "-c", "ioreg -rn AppleSmartBattery | awk '/\"Temperature\"/ {print $3}'"); err == nil {
-		valStr := strings.TrimSpace(out)
-		if tempRaw, err := strconv.Atoi(valStr); err == nil && tempRaw > 0 {
-			thermal.CPUTemp = float64(tempRaw) / 100.0
-			return thermal
+	// Power metrics from ioreg (fast, real-time).
+	ctxPower, cancelPower := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancelPower()
+	if out, err := runCmd(ctxPower, "ioreg", "-rn", "AppleSmartBattery"); err == nil {
+		lines := strings.Split(out, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+
+			// Battery temperature ("Temperature" = 3055).
+			if _, after, found := strings.Cut(line, "\"Temperature\" = "); found {
+				valStr := strings.TrimSpace(after)
+				if tempRaw, err := strconv.Atoi(valStr); err == nil && tempRaw > 0 {
+					thermal.CPUTemp = float64(tempRaw) / 100.0
+				}
+			}
+
+			// Adapter power (Watts) from current adapter.
+			if strings.Contains(line, "\"AdapterDetails\" = {") && !strings.Contains(line, "AppleRaw") {
+				if _, after, found := strings.Cut(line, "\"Watts\"="); found {
+					valStr := strings.TrimSpace(after)
+					valStr, _, _ = strings.Cut(valStr, ",")
+					valStr, _, _ = strings.Cut(valStr, "}")
+					valStr = strings.TrimSpace(valStr)
+					if watts, err := strconv.ParseFloat(valStr, 64); err == nil && watts > 0 {
+						thermal.AdapterPower = watts
+					}
+				}
+			}
+
+			// System power consumption (mW -> W).
+			if _, after, found := strings.Cut(line, "\"SystemPowerIn\"="); found {
+				valStr := strings.TrimSpace(after)
+				valStr, _, _ = strings.Cut(valStr, ",")
+				valStr, _, _ = strings.Cut(valStr, "}")
+				valStr = strings.TrimSpace(valStr)
+				if powerMW, err := strconv.ParseFloat(valStr, 64); err == nil && powerMW > 0 {
+					thermal.SystemPower = powerMW / 1000.0
+				}
+			}
+
+			// Battery power (mW -> W, positive = discharging).
+			if _, after, found := strings.Cut(line, "\"BatteryPower\"="); found {
+				valStr := strings.TrimSpace(after)
+				valStr, _, _ = strings.Cut(valStr, ",")
+				valStr, _, _ = strings.Cut(valStr, "}")
+				valStr = strings.TrimSpace(valStr)
+				if powerMW, err := strconv.ParseFloat(valStr, 64); err == nil {
+					thermal.BatteryPower = powerMW / 1000.0
+				}
+			}
 		}
 	}
 
-	// 2. Try thermal level as a proxy (fallback)
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel2()
-	out2, err := runCmd(ctx2, "sysctl", "-n", "machdep.xcpm.cpu_thermal_level")
-	if err == nil {
-		level, _ := strconv.Atoi(strings.TrimSpace(out2))
-		// Estimate temp: level 0-100 roughly maps to 40-100°C
-		if level >= 0 {
-			thermal.CPUTemp = 45 + float64(level)*0.5
+	// Fallback: thermal level proxy.
+	if thermal.CPUTemp == 0 {
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel2()
+		out2, err := runCmd(ctx2, "sysctl", "-n", "machdep.xcpm.cpu_thermal_level")
+		if err == nil {
+			level, _ := strconv.Atoi(strings.TrimSpace(out2))
+			if level >= 0 {
+				thermal.CPUTemp = 45 + float64(level)*0.5
+			}
 		}
 	}
 

@@ -24,9 +24,9 @@ get_memory_info() {
     vm_output=$(vm_stat 2> /dev/null || echo "")
     page_size=4096
 
-    active=$(echo "$vm_output" | LC_ALL=C awk '/Pages active:/ {print $NF}' | tr -d '.' 2> /dev/null || echo "0")
-    wired=$(echo "$vm_output" | LC_ALL=C awk '/Pages wired down:/ {print $NF}' | tr -d '.' 2> /dev/null || echo "0")
-    compressed=$(echo "$vm_output" | LC_ALL=C awk '/Pages occupied by compressor:/ {print $NF}' | tr -d '.' 2> /dev/null || echo "0")
+    active=$(echo "$vm_output" | LC_ALL=C awk '/Pages active:/ {print $NF}' | tr -d '.\n' 2> /dev/null)
+    wired=$(echo "$vm_output" | LC_ALL=C awk '/Pages wired down:/ {print $NF}' | tr -d '.\n' 2> /dev/null)
+    compressed=$(echo "$vm_output" | LC_ALL=C awk '/Pages occupied by compressor:/ {print $NF}' | tr -d '.\n' 2> /dev/null)
 
     active=${active:-0}
     wired=${wired:-0}
@@ -47,8 +47,8 @@ get_disk_info() {
     df_output=$(command df -k "$home" 2> /dev/null | tail -1)
 
     local total_kb used_kb
-    total_kb=$(echo "$df_output" | LC_ALL=C awk '{print $2}' 2> /dev/null || echo "0")
-    used_kb=$(echo "$df_output" | LC_ALL=C awk '{print $3}' 2> /dev/null || echo "0")
+    total_kb=$(echo "$df_output" | LC_ALL=C awk 'NR==1{print $2}' 2> /dev/null)
+    used_kb=$(echo "$df_output" | LC_ALL=C awk 'NR==1{print $3}' 2> /dev/null)
 
     total_kb=${total_kb:-0}
     used_kb=${used_kb:-0}
@@ -122,16 +122,30 @@ EOF
     # Collect all optimization items
     local -a items=()
 
-    # Always-on items (no size checks - instant)
-    items+=('system_maintenance|System Maintenance|Rebuild system databases & flush caches|true')
-    items+=('maintenance_scripts|Maintenance Scripts|Rotate system logs|true')
-    items+=('recent_items|Recent Items|Clear recent apps/documents/servers lists|true')
-    items+=('log_cleanup|Diagnostics Cleanup|Purge old diagnostic & crash logs|true')
-    items+=('mail_downloads|Mail Downloads|Clear old mail attachments (> 30 days)|true')
-    items+=('swap_cleanup|Swap Refresh|Reset swap files and dynamic pager|true')
-    items+=('spotlight_cache_cleanup|Spotlight Cache|Clear user-level Spotlight indexes|true')
-    items+=('developer_cleanup|Developer Cleanup|Clear Xcode DerivedData & DeviceSupport|true')
-    items+=('network_optimization|Network Optimization|Flush DNS, ARP & reset mDNS|true')
+    # Core optimizations (safe and valuable)
+    items+=('system_maintenance|DNS & Spotlight Check|Refresh DNS cache & verify Spotlight status|true')
+    items+=('cache_refresh|Finder Cache Refresh|Refresh QuickLook thumbnails & icon services cache|true')
+    items+=('saved_state_cleanup|App State Cleanup|Remove old saved application states (30+ days)|true')
+    items+=('fix_broken_configs|Broken Config Repair|Fix corrupted preferences files|true')
+    items+=('network_optimization|Network Cache Refresh|Optimize DNS cache & restart mDNSResponder|true')
+
+    # Advanced optimizations (high value, auto-run with safety checks)
+    items+=('sqlite_vacuum|Database Optimization|Compress SQLite databases for Mail, Safari & Messages (skips if apps are running)|true')
+    items+=('launch_services_rebuild|LaunchServices Repair|Repair "Open with" menu & file associations|true')
+    items+=('font_cache_rebuild|Font Cache Rebuild|Rebuild font database to fix rendering issues|true')
+    items+=('dock_refresh|Dock Refresh|Fix broken icons and visual glitches in the Dock|true')
+
+    # System performance optimizations (new)
+    items+=('memory_pressure_relief|Memory Optimization|Release inactive memory to improve system responsiveness|true')
+    items+=('network_stack_optimize|Network Stack Refresh|Flush routing table and ARP cache to resolve network issues|true')
+    items+=('disk_permissions_repair|Permission Repair|Fix user directory permission issues|true')
+    items+=('bluetooth_reset|Bluetooth Refresh|Restart Bluetooth module to fix connectivity (skips if in use)|true')
+    items+=('spotlight_index_optimize|Spotlight Optimization|Rebuild index if search is slow (smart detection)|true')
+
+    # Removed high-risk optimizations:
+    # - startup_items_cleanup: Risk of deleting legitimate app helpers
+    # - system_services_refresh: Risk of data loss when killing system services
+    # - dyld_cache_update: Low benefit, time-consuming, auto-managed by macOS
 
     # Output items as JSON
     local first=true

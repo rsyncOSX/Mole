@@ -17,7 +17,7 @@ func (c *Collector) collectNetwork(now time.Time) ([]NetworkStatus, error) {
 		return nil, err
 	}
 
-	// Get IP addresses for interfaces
+	// Map interface IPs.
 	ifAddrs := getInterfaceIPs()
 
 	if c.lastNetAt.IsZero() {
@@ -81,7 +81,7 @@ func getInterfaceIPs() map[string]string {
 	}
 	for _, iface := range ifaces {
 		for _, addr := range iface.Addrs {
-			// Only IPv4
+			// IPv4 only.
 			if strings.Contains(addr.Addr, ".") && !strings.HasPrefix(addr.Addr, "127.") {
 				ip := strings.Split(addr.Addr, "/")[0]
 				result[iface.Name] = ip
@@ -104,14 +104,14 @@ func isNoiseInterface(name string) bool {
 }
 
 func collectProxy() ProxyStatus {
-	// Check environment variables first
+	// Check environment variables first.
 	for _, env := range []string{"https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"} {
 		if val := os.Getenv(env); val != "" {
 			proxyType := "HTTP"
 			if strings.HasPrefix(val, "socks") {
 				proxyType = "SOCKS"
 			}
-			// Extract host
+			// Extract host.
 			host := val
 			if strings.Contains(host, "://") {
 				host = strings.SplitN(host, "://", 2)[1]
@@ -123,7 +123,7 @@ func collectProxy() ProxyStatus {
 		}
 	}
 
-	// macOS: check system proxy via scutil
+	// macOS: check system proxy via scutil.
 	if runtime.GOOS == "darwin" {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()

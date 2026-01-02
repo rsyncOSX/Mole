@@ -18,19 +18,18 @@ func collectHardware(totalRAM uint64, disks []DiskStatus) HardwareInfo {
 		}
 	}
 
-	// Get model and CPU from system_profiler
+	// Model and CPU from system_profiler.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	var model, cpuModel, osVersion string
 
-	// Get hardware overview
 	out, err := runCmd(ctx, "system_profiler", "SPHardwareDataType")
 	if err == nil {
 		lines := strings.Split(out, "\n")
 		for _, line := range lines {
 			lower := strings.ToLower(strings.TrimSpace(line))
-			// Prefer "Model Name" over "Model Identifier"
+			// Prefer "Model Name" over "Model Identifier".
 			if strings.Contains(lower, "model name:") {
 				parts := strings.Split(line, ":")
 				if len(parts) == 2 {
@@ -52,7 +51,6 @@ func collectHardware(totalRAM uint64, disks []DiskStatus) HardwareInfo {
 		}
 	}
 
-	// Get macOS version
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel2()
 	out2, err := runCmd(ctx2, "sw_vers", "-productVersion")
@@ -60,7 +58,6 @@ func collectHardware(totalRAM uint64, disks []DiskStatus) HardwareInfo {
 		osVersion = "macOS " + strings.TrimSpace(out2)
 	}
 
-	// Get disk size
 	diskSize := "Unknown"
 	if len(disks) > 0 {
 		diskSize = humanBytes(disks[0].Total)

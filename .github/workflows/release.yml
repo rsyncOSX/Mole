@@ -9,73 +9,78 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
-    runs-on: macos-latest
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: release-amd64
+            artifact_name: binaries-amd64
+          - os: macos-latest
+            target: release-arm64
+            artifact_name: binaries-arm64
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v5
         with:
           go-version: "1.24.6"
-          cache: true
 
-      - name: Build Universal Binary for disk analyzer
-        run: ./scripts/build-analyze.sh
-
-      - name: Build Universal Binary for system status
-        run: ./scripts/build-status.sh
-
-      - name: Verify binary is valid
+      - name: Build Binaries
         run: |
-          if [[ ! -x bin/analyze-go ]]; then
-            echo "Error: bin/analyze-go is not executable"
-            exit 1
-          fi
-          if [[ ! -x bin/status-go ]]; then
-            echo "Error: bin/status-go is not executable"
-            exit 1
-          fi
-          echo "Binary info:"
-          file bin/analyze-go
-          ls -lh bin/analyze-go
-          file bin/status-go
-          ls -lh bin/status-go
-          echo ""
-          echo "✓ Universal binary built successfully"
+          make ${{ matrix.target }}
+          ls -l bin/
 
-      - name: Commit binaries for release
+      - name: Package binaries for Homebrew
         run: |
-          # Configure Git
-          git config user.name "Tw93"
-          git config user.email "tw93@qq.com"
-
-          # Save binaries to temp location
-          cp bin/analyze-go /tmp/analyze-go
-          cp bin/status-go /tmp/status-go
-
-          # Switch to main branch
-          git fetch origin main
-          git checkout main
-          git pull origin main
-
-          # Restore binaries
-          mv /tmp/analyze-go bin/analyze-go
-          mv /tmp/status-go bin/status-go
-
-          # Commit and Push
-          git add bin/analyze-go bin/status-go
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
+          cd bin
+          # Package binaries into tar.gz for Homebrew resource
+          if [[ "${{ matrix.target }}" == "release-arm64" ]]; then
+            tar -czf binaries-darwin-arm64.tar.gz analyze-darwin-arm64 status-darwin-arm64
+            ls -lh binaries-darwin-arm64.tar.gz
           else
-            git commit -m "chore: update binaries for ${GITHUB_REF#refs/tags/}"
-            git push origin main
+            tar -czf binaries-darwin-amd64.tar.gz analyze-darwin-amd64 status-darwin-amd64
+            ls -lh binaries-darwin-amd64.tar.gz
           fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: bin/*-darwin-*
+          retention-days: 1
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: bin
+          pattern: binaries-*
+          merge-multiple: true
+
+      - name: Display structure of downloaded files
+        run: ls -R bin/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: bin/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
 
   update-formula:
     runs-on: ubuntu-latest
-    needs: build-release
+    needs: release
     steps:
       - name: Extract version from tag
         id: tag_version
@@ -86,8 +91,8 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Releasing version: $VERSION (tag: $TAG)"
 
-      - name: Update Homebrew formula
-        uses: mislav/bump-homebrew-formula-action@v3
+      - name: Update Homebrew formula (Personal Tap)
+        uses: mislav/bump-homebrew-formula-action@56a283fa15557e9abaa4bdb63b8212abc68e655c # v3.6
         with:
           formula-name: mole
           formula-path: Formula/mole.rb
@@ -100,9 +105,25 @@ jobs:
         env:
           COMMITTER_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      - name: Verify formula update
+      - name: Update Homebrew formula (Official Core)
+        uses: mislav/bump-homebrew-formula-action@56a283fa15557e9abaa4bdb63b8212abc68e655c # v3.6
+        with:
+          formula-name: mole
+          homebrew-tap: Homebrew/homebrew-core
+          tag-name: ${{ steps.tag_version.outputs.tag }}
+          commit-message: |
+            mole ${{ steps.tag_version.outputs.version }}
+
+            Automated release via GitHub Actions
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+        continue-on-error: true
+
+      - name: Verify formula updates
         if: success()
         run: |
-          echo "✓ Homebrew formula updated successfully"
+          echo "✓ Homebrew formulae updated successfully"
           echo "  Version: ${{ steps.tag_version.outputs.version }}"
           echo "  Tag: ${{ steps.tag_version.outputs.tag }}"
+          echo "  Personal tap: tw93/homebrew-tap"
+          echo "  Official core: Homebrew/homebrew-core (PR created)"

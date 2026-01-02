@@ -4,7 +4,6 @@ setup_file() {
     PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
     export PROJECT_ROOT
 
-    # Read current version from mole file (single source of truth)
     CURRENT_VERSION="$(grep '^VERSION=' "$PROJECT_ROOT/mole" | head -1 | sed 's/VERSION="\(.*\)"/\1/')"
     export CURRENT_VERSION
 

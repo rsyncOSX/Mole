@@ -5,23 +5,20 @@ import (
 	"strings"
 )
 
-// isCleanableDir checks if a directory is safe to manually delete
-// but NOT cleaned by mo clean (so user might want to delete it manually)
+// isCleanableDir marks paths safe to delete manually (not handled by mo clean).
 func isCleanableDir(path string) bool {
 	if path == "" {
 		return false
 	}
 
-	// Exclude paths that mo clean will handle automatically
-	// These are system caches/logs that mo clean already processes
+	// Exclude paths mo clean already handles.
 	if isHandledByMoClean(path) {
 		return false
 	}
 
 	baseName := filepath.Base(path)
 
-	// Only mark project dependencies and build outputs
-	// These are safe to delete but mo clean won't touch them
+	// Project dependencies and build outputs are safe.
 	if projectDependencyDirs[baseName] {
 		return true
 	}
@@ -29,9 +26,8 @@ func isCleanableDir(path string) bool {
 	return false
 }
 
-// isHandledByMoClean checks if this path will be cleaned by mo clean
+// isHandledByMoClean checks if a path is cleaned by mo clean.
 func isHandledByMoClean(path string) bool {
-	// Paths that mo clean handles (from clean.sh)
 	cleanPaths := []string{
 		"/Library/Caches/",
 		"/Library/Logs/",
@@ -49,16 +45,15 @@ func isHandledByMoClean(path string) bool {
 	return false
 }
 
-// Project dependency and build directories
-// These are safe to delete manually but mo clean won't touch them
+// Project dependency and build directories.
 var projectDependencyDirs = map[string]bool{
-	// JavaScript/Node dependencies
+	// JavaScript/Node.
 	"node_modules":     true,
 	"bower_components": true,
-	".yarn":            true, // Yarn local cache
-	".pnpm-store":      true, // pnpm store
+	".yarn":            true,
+	".pnpm-store":      true,
 
-	// Python dependencies and outputs
+	// Python.
 	"venv":               true,
 	".venv":              true,
 	"virtualenv":         true,
@@ -68,18 +63,18 @@ var projectDependencyDirs = map[string]bool{
 	".ruff_cache":        true,
 	".tox":               true,
 	".eggs":              true,
-	"htmlcov":            true, // Coverage reports
-	".ipynb_checkpoints": true, // Jupyter checkpoints
+	"htmlcov":            true,
+	".ipynb_checkpoints": true,
 
-	// Ruby dependencies
+	// Ruby.
 	"vendor":  true,
 	".bundle": true,
 
-	// Java/Kotlin/Scala
-	".gradle": true, // Project-level Gradle cache
-	"out":     true, // IntelliJ IDEA build output
+	// Java/Kotlin/Scala.
+	".gradle": true,
+	"out":     true,
 
-	// Build outputs (can be rebuilt)
+	// Build outputs.
 	"build":         true,
 	"dist":          true,
 	"target":        true,
@@ -88,24 +83,25 @@ var projectDependencyDirs = map[string]bool{
 	".output":       true,
 	".parcel-cache": true,
 	".turbo":        true,
-	".vite":         true, // Vite cache
-	".nx":           true, // Nx cache
+	".vite":         true,
+	".nx":           true,
 	"coverage":      true,
 	".coverage":     true,
-	".nyc_output":   true, // NYC coverage
+	".nyc_output":   true,
 
-	// Frontend framework outputs
-	".angular":    true, // Angular CLI cache
-	".svelte-kit": true, // SvelteKit build
-	".astro":      true, // Astro cache
-	".docusaurus": true, // Docusaurus build
+	// Frontend framework outputs.
+	".angular":    true,
+	".svelte-kit": true,
+	".astro":      true,
+	".docusaurus": true,
 
-	// iOS/macOS development
+	// Apple dev.
 	"DerivedData": true,
 	"Pods":        true,
 	".build":      true,
 	"Carthage":    true,
+	".dart_tool":  true,
 
-	// Other tools
-	".terraform": true, // Terraform plugins
+	// Other tools.
+	".terraform": true,
 }

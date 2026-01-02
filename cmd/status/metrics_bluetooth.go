@@ -80,7 +80,7 @@ func parseSPBluetooth(raw string) []BluetoothDevice {
 			continue
 		}
 		if !strings.HasPrefix(line, "    ") && strings.HasSuffix(trim, ":") {
-			// Reset at top-level sections
+			// Reset at top-level sections.
 			currentName = ""
 			connected = false
 			battery = ""

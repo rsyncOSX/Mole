@@ -44,7 +44,7 @@ save_whitelist_patterns() {
         header_text="# Mole Whitelist - Protected paths won't be deleted\n# Default protections: Playwright browsers, HuggingFace models, Maven repo, Ollama models, Surge Mac, R renv, Finder metadata\n# Add one pattern per line to keep items safe."
     fi
 
-    mkdir -p "$(dirname "$config_file")"
+    ensure_user_file "$config_file"
 
     echo -e "$header_text" > "$config_file"
 
@@ -81,6 +81,7 @@ Apple Mail cache|$HOME/Library/Caches/com.apple.mail/*|system_cache
 Gradle build cache (Android Studio, Gradle projects)|$HOME/.gradle/caches/*|ide_cache
 Gradle daemon processes cache|$HOME/.gradle/daemon/*|ide_cache
 Xcode DerivedData (build outputs, indexes)|$HOME/Library/Developer/Xcode/DerivedData/*|ide_cache
+Xcode archives (built app packages)|$HOME/Library/Developer/Xcode/Archives/*|ide_cache
 Xcode internal cache files|$HOME/Library/Caches/com.apple.dt.Xcode/*|ide_cache
 Xcode iOS device support symbols|$HOME/Library/Developer/Xcode/iOS DeviceSupport/*/Symbols/System/Library/Caches/*|ide_cache
 Maven local repository (Java dependencies)|$HOME/.m2/repository/*|ide_cache
@@ -143,6 +144,7 @@ Podman container cache|$HOME/.local/share/containers/cache/*|container_cache
 Font cache|$HOME/Library/Caches/com.apple.FontRegistry/*|system_cache
 Spotlight metadata cache|$HOME/Library/Caches/com.apple.spotlight/*|system_cache
 CloudKit cache|$HOME/Library/Caches/CloudKit/*|system_cache
+Trash|$HOME/.Trash|system_cache
 EOF
     # Add FINDER_METADATA with constant reference
     echo "Finder metadata (.DS_Store)|$FINDER_METADATA_SENTINEL|system_cache"
@@ -154,8 +156,8 @@ get_optimize_whitelist_items() {
     cat << 'EOF'
 macOS Firewall check|firewall|security_check
 Gatekeeper check|gatekeeper|security_check
-Homebrew updates check|check_brew_updates|update_check
 macOS system updates check|check_macos_updates|update_check
+Mole updates check|check_mole_update|update_check
 Homebrew health check (doctor)|check_brew_health|health_check
 SIP status check|check_sip|security_check
 FileVault status check|check_filevault|security_check
@@ -163,7 +165,6 @@ TouchID sudo check|check_touchid|config_check
 Rosetta 2 check|check_rosetta|config_check
 Git configuration check|check_git_config|config_check
 Login items check|check_login_items|config_check
-Spotlight cache cleanup|spotlight_cache|system_optimization
 EOF
 }
 
@@ -280,12 +281,16 @@ manage_whitelist_categories() {
 
     if [[ "$mode" == "optimize" ]]; then
         items_source=$(get_optimize_whitelist_items)
-        menu_title="Whitelist Manager – Select system checks to ignore"
         active_config_file="$WHITELIST_CONFIG_OPTIMIZE"
+        local display_config="${active_config_file/#$HOME/~}"
+        menu_title="Whitelist Manager – Select system checks to ignore
+${GRAY}Edit: ${display_config}${NC}"
     else
         items_source=$(get_all_cache_items)
-        menu_title="Whitelist Manager – Select caches to protect"
         active_config_file="$WHITELIST_CONFIG_CLEAN"
+        local display_config="${active_config_file/#$HOME/~}"
+        menu_title="Whitelist Manager – Select caches to protect
+${GRAY}Edit: ${display_config}${NC}"
     fi
 
     while IFS='|' read -r display_name pattern _; do
@@ -366,9 +371,8 @@ manage_whitelist_categories() {
     unset MOLE_PRESELECTED_INDICES
     local exit_code=$?
 
+    # Normal exit or cancel
     if [[ $exit_code -ne 0 ]]; then
-        echo ""
-        echo -e "${YELLOW}Cancelled${NC}"
         return 1
     fi
 
@@ -413,7 +417,8 @@ manage_whitelist_categories() {
     else
         summary_lines+=("Protected ${total_protected} cache(s)")
     fi
-    summary_lines+=("Saved to ${active_config_file}")
+    local display_config="${active_config_file/#$HOME/~}"
+    summary_lines+=("Config: ${GRAY}${display_config}${NC}")
 
     print_summary_block "${summary_lines[@]}"
     printf '\n'

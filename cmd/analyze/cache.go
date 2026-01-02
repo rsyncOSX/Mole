@@ -222,7 +222,7 @@ func loadCacheFromDisk(path string) (*cacheEntry, error) {
 	}
 
 	if info.ModTime().After(entry.ModTime) {
-		// Only expire cache if the directory has been newer for longer than the grace window.
+		// Allow grace window.
 		if cacheModTimeGrace <= 0 || info.ModTime().Sub(entry.ModTime) > cacheModTimeGrace {
 			return nil, fmt.Errorf("cache expired: directory modified")
 		}
@@ -290,29 +290,23 @@ func removeOverviewSnapshot(path string) {
 	}
 }
 
-// prefetchOverviewCache scans overview directories in background
-// to populate cache for faster overview mode access
+// prefetchOverviewCache warms overview cache in background.
 func prefetchOverviewCache(ctx context.Context) {
 	entries := createOverviewEntries()
 
-	// Check which entries need refresh
 	var needScan []string
 	for _, entry := range entries {
-		// Skip if we have fresh cache
 		if size, err := loadStoredOverviewSize(entry.Path); err == nil && size > 0 {
 			continue
 		}
 		needScan = append(needScan, entry.Path)
 	}
 
-	// Nothing to scan
 	if len(needScan) == 0 {
 		return
 	}
 
-	// Scan and cache in background with context cancellation support
 	for _, path := range needScan {
-		// Check if context is cancelled
 		select {
 		case <-ctx.Done():
 			return

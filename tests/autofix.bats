@@ -76,6 +76,7 @@ sudo() {
             echo "Installing Rosetta 2 stub output"
             return 0
             ;;
+        /usr/libexec/ApplicationFirewall/socketfilterfw) return 0 ;;
         *) return 0 ;;
     esac
 }
