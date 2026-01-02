@@ -307,6 +307,10 @@ scan_purge_targets() {
         return
     fi
     if command -v fd > /dev/null 2>&1; then
+        local pattern="($(
+            IFS='|'
+            echo "${PURGE_TARGETS[*]}"
+        ))"
         local fd_args=(
             "--absolute-path"
             "--hidden"
@@ -320,10 +324,7 @@ scan_purge_targets() {
             "--exclude" ".Trash"
             "--exclude" "Applications"
         )
-        for target in "${PURGE_TARGETS[@]}"; do
-            fd_args+=("-g" "$target")
-        done
-        fd "${fd_args[@]}" . "$search_path" 2> /dev/null | while IFS= read -r item; do
+        fd "${fd_args[@]}" "$pattern" "$search_path" 2> /dev/null | while IFS= read -r item; do
             if is_safe_project_artifact "$item" "$search_path"; then
                 echo "$item"
             fi
