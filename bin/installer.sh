@@ -42,6 +42,7 @@ readonly INSTALLER_SCAN_PATHS=(
 )
 readonly MAX_ZIP_ENTRIES=5
 ZIP_LIST_CMD=()
+IN_ALT_SCREEN=0
 
 if command -v zipinfo > /dev/null 2>&1; then
     ZIP_LIST_CMD=(zipinfo -1)
@@ -217,7 +218,9 @@ collect_installers() {
     fi
 
     if [[ ${#all_files[@]} -eq 0 ]]; then
-        echo -e "${GREEN}${ICON_SUCCESS}${NC} Great! No installer files to clean"
+        if [[ "${IN_ALT_SCREEN:-0}" != "1" ]]; then
+            echo -e "${GREEN}${ICON_SUCCESS}${NC} Great! No installer files to clean"
+        fi
         return 1
     fi
 
@@ -310,6 +313,10 @@ select_installers() {
 
     restore_terminal() {
         trap - EXIT INT TERM
+        if [[ "${IN_ALT_SCREEN:-0}" == "1" ]]; then
+            leave_alt_screen
+            IN_ALT_SCREEN=0
+        fi
         show_cursor
         if [[ -n "${original_stty:-}" ]]; then
             stty "${original_stty}" 2>/dev/null || stty sane 2>/dev/null || true
@@ -587,24 +594,35 @@ perform_installers() {
     # Enter alt screen for scanning and selection
     if [[ -t 1 ]]; then
         enter_alt_screen
+        IN_ALT_SCREEN=1
         printf "\033[2J\033[H" >&2
     fi
 
     # Collect installers
     if ! collect_installers; then
-        if [[ -t 1 ]]; then leave_alt_screen; fi
+        if [[ -t 1 ]]; then
+            leave_alt_screen
+            IN_ALT_SCREEN=0
+        fi
+        printf '\n'
+        echo -e "${GREEN}${ICON_SUCCESS}${NC} Great! No installer files to clean"
+        printf '\n'
         return 2  # Nothing to clean
     fi
 
     # Show menu
     if ! show_installer_menu; then
-        if [[ -t 1 ]]; then leave_alt_screen; fi
+        if [[ -t 1 ]]; then
+            leave_alt_screen
+            IN_ALT_SCREEN=0
+        fi
         return 1  # User cancelled
     fi
 
     # Leave alt screen before deletion (so confirmation and results are on main screen)
     if [[ -t 1 ]]; then
         leave_alt_screen
+        IN_ALT_SCREEN=0
     fi
 
     # Delete selected
