@@ -117,6 +117,8 @@ opt_system_maintenance() {
 
 # Refresh Finder caches (QuickLook/icon services).
 opt_cache_refresh() {
+    local total_cache_size=0
+
     if [[ "${MO_DEBUG:-}" == "1" ]]; then
         debug_operation_start "Finder Cache Refresh" "Refresh QuickLook thumbnails and icon services"
         debug_operation_detail "Method" "Remove cache files and rebuild via qlmanage"
@@ -157,11 +159,17 @@ opt_cache_refresh() {
     for target_path in "${cache_targets[@]}"; do
         if [[ -e "$target_path" ]]; then
             if ! should_protect_path "$target_path"; then
+                local size_kb
+                size_kb=$(get_path_size_kb "$target_path" 2> /dev/null || echo "0")
+                if [[ "$size_kb" =~ ^[0-9]+$ ]]; then
+                    total_cache_size=$((total_cache_size + size_kb))
+                fi
                 safe_remove "$target_path" true > /dev/null 2>&1
             fi
         fi
     done
 
+    export OPTIMIZE_CACHE_CLEANED_KB="${total_cache_size}"
     opt_msg "QuickLook thumbnails refreshed"
     opt_msg "Icon services cache rebuilt"
 }
@@ -213,6 +221,7 @@ opt_fix_broken_configs() {
         stop_inline_spinner
     fi
 
+    export OPTIMIZE_CONFIGS_REPAIRED="${broken_prefs}"
     if [[ $broken_prefs -gt 0 ]]; then
         opt_msg "Repaired $broken_prefs corrupted preference files"
     else
@@ -361,6 +370,7 @@ opt_sqlite_vacuum() {
         stop_inline_spinner
     fi
 
+    export OPTIMIZE_DATABASES_COUNT="${vacuumed}"
     if [[ $vacuumed -gt 0 ]]; then
         opt_msg "Optimized $vacuumed databases for Mail, Safari, Messages"
     elif [[ $timed_out -eq 0 && $failed -eq 0 ]]; then

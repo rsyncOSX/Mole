@@ -83,21 +83,54 @@ show_optimization_summary() {
         summary_details+=("Run without ${YELLOW}--dry-run${NC} to apply these changes")
     else
         summary_title="Optimization and Check Complete"
-        summary_details+=("Applied ${GREEN}${total_applied:-0}${NC} optimizations; all system services tuned")
-        summary_details+=("Updates, security and system health fully reviewed")
 
-        local summary_line4=""
+        # Build statistics summary
+        local -a stats=()
+        local cache_kb="${OPTIMIZE_CACHE_CLEANED_KB:-0}"
+        local db_count="${OPTIMIZE_DATABASES_COUNT:-0}"
+        local config_count="${OPTIMIZE_CONFIGS_REPAIRED:-0}"
+
+        if [[ "$cache_kb" =~ ^[0-9]+$ ]] && [[ "$cache_kb" -gt 0 ]]; then
+            local cache_human=$(bytes_to_human "$((cache_kb * 1024))")
+            stats+=("${cache_human} cache cleaned")
+        fi
+
+        if [[ "$db_count" =~ ^[0-9]+$ ]] && [[ "$db_count" -gt 0 ]]; then
+            stats+=("${db_count} databases optimized")
+        fi
+
+        if [[ "$config_count" =~ ^[0-9]+$ ]] && [[ "$config_count" -gt 0 ]]; then
+            stats+=("${config_count} configs repaired")
+        fi
+
+        # Build first summary line with most important stat only
+        local key_stat=""
+        if [[ "$cache_kb" =~ ^[0-9]+$ ]] && [[ "$cache_kb" -gt 0 ]]; then
+            local cache_human=$(bytes_to_human "$((cache_kb * 1024))")
+            key_stat="${cache_human} cache cleaned"
+        elif [[ "$db_count" =~ ^[0-9]+$ ]] && [[ "$db_count" -gt 0 ]]; then
+            key_stat="${db_count} databases optimized"
+        elif [[ "$config_count" =~ ^[0-9]+$ ]] && [[ "$config_count" -gt 0 ]]; then
+            key_stat="${config_count} configs repaired"
+        fi
+
+        if [[ -n "$key_stat" ]]; then
+            summary_details+=("Applied ${GREEN}${total_applied:-0}${NC} optimizations — ${key_stat}")
+        else
+            summary_details+=("Applied ${GREEN}${total_applied:-0}${NC} optimizations — all services tuned")
+        fi
+
+        local summary_line3=""
         if [[ -n "${AUTO_FIX_SUMMARY:-}" ]]; then
-            summary_line4="${AUTO_FIX_SUMMARY}"
+            summary_line3="${AUTO_FIX_SUMMARY}"
             if [[ -n "${AUTO_FIX_DETAILS:-}" ]]; then
                 local detail_join
                 detail_join=$(echo "${AUTO_FIX_DETAILS}" | paste -sd ", " -)
-                [[ -n "$detail_join" ]] && summary_line4+=" — ${detail_join}"
+                [[ -n "$detail_join" ]] && summary_line3+=" — ${detail_join}"
             fi
-        else
-            summary_line4="Your Mac is now faster and more responsive"
+            summary_details+=("$summary_line3")
         fi
-        summary_details+=("$summary_line4")
+        summary_details+=("System fully optimized — faster, more secure and responsive")
     fi
 
     print_summary_block "$summary_title" "${summary_details[@]}"
