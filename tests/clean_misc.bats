@@ -92,6 +92,7 @@ EOF
 @test "scan_external_volumes skips when no volumes" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
 set -euo pipefail
+export DRY_RUN="false"
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/user.sh"
 run_with_timeout() { return 1; }
