@@ -32,7 +32,7 @@ func (m model) View() string {
 				return b.String()
 			} else {
 				fmt.Fprintf(&b, "%sSelect a location to explore:%s  ", colorGray, colorReset)
-				fmt.Fprintf(&b, "%s%s%s%s Scanning...\n\n", colorCyan, colorBold, spinnerFrames[m.spinner], colorReset)
+				fmt.Fprintf(&b, "%s%s%s%s %s\n\n", colorCyan, colorBold, spinnerFrames[m.spinner], colorReset, m.status)
 			}
 		} else {
 			hasPending := false
@@ -44,7 +44,7 @@ func (m model) View() string {
 			}
 			if hasPending {
 				fmt.Fprintf(&b, "%sSelect a location to explore:%s  ", colorGray, colorReset)
-				fmt.Fprintf(&b, "%s%s%s%s Scanning...\n\n", colorCyan, colorBold, spinnerFrames[m.spinner], colorReset)
+				fmt.Fprintf(&b, "%s%s%s%s %s\n\n", colorCyan, colorBold, spinnerFrames[m.spinner], colorReset, m.status)
 			} else {
 				fmt.Fprintf(&b, "%sSelect a location to explore:%s\n\n", colorGray, colorReset)
 			}
@@ -99,7 +99,7 @@ func (m model) View() string {
 			colorGreen, humanizeBytes(bytesScanned), colorReset)
 
 		if m.currentPath != nil {
-			currentPath := *m.currentPath
+			currentPath := m.currentPath.Load().(string)
 			if currentPath != "" {
 				shortPath := displayPath(currentPath)
 				shortPath = truncateMiddle(shortPath, 50)

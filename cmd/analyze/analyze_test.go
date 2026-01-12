@@ -45,9 +45,10 @@ func TestScanPathConcurrentBasic(t *testing.T) {
 	}
 
 	var filesScanned, dirsScanned, bytesScanned int64
-	current := ""
+	current := &atomic.Value{}
+	current.Store("")
 
-	result, err := scanPathConcurrent(root, &filesScanned, &dirsScanned, &bytesScanned, &current)
+	result, err := scanPathConcurrent(root, &filesScanned, &dirsScanned, &bytesScanned, current)
 	if err != nil {
 		t.Fatalf("scanPathConcurrent returned error: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestMeasureOverviewSize(t *testing.T) {
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatalf("create target: %v", err)
 	}
-	content := []byte(strings.Repeat("x", 2048))
+	content := []byte(strings.Repeat("x", 4096))
 	if err := os.WriteFile(filepath.Join(target, "data.bin"), content, 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
@@ -224,6 +225,20 @@ func TestMeasureOverviewSize(t *testing.T) {
 	}
 	if cached != size {
 		t.Fatalf("snapshot mismatch: want %d, got %d", size, cached)
+	}
+
+	// Ensure measureOverviewSize does not use cache
+	// APFS block size is 4KB, 4097 bytes should use more blocks
+	content = []byte(strings.Repeat("x", 4097))
+	if err := os.WriteFile(filepath.Join(target, "data2.bin"), content, 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	size2, err := measureOverviewSize(target)
+	if err != nil {
+		t.Fatalf("measureOverviewSize: %v", err)
+	}
+	if size2 == size {
+		t.Fatalf("measureOverwiewSize used cache")
 	}
 }
 
@@ -347,10 +362,11 @@ func TestScanPathPermissionError(t *testing.T) {
 	}()
 
 	var files, dirs, bytes int64
-	current := ""
+	current := &atomic.Value{}
+	current.Store("")
 
 	// Scanning the locked dir itself should fail.
-	_, err := scanPathConcurrent(lockedDir, &files, &dirs, &bytes, &current)
+	_, err := scanPathConcurrent(lockedDir, &files, &dirs, &bytes, current)
 	if err == nil {
 		t.Fatalf("expected error scanning locked directory, got nil")
 	}

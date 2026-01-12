@@ -126,7 +126,6 @@ tmutil() {
 start_section_spinner(){ :; }
 stop_section_spinner(){ :; }
 tm_is_running(){ return 1; }
-tm_snapshots_mounted(){ return 1; }
 
 DRY_RUN="false"
 clean_local_snapshots
@@ -157,7 +156,6 @@ start_section_spinner(){ :; }
 stop_section_spinner(){ :; }
 note_activity(){ :; }
 tm_is_running(){ return 1; }
-tm_snapshots_mounted(){ return 1; }
 
 DRY_RUN="true"
 clean_local_snapshots
@@ -193,7 +191,6 @@ start_section_spinner(){ :; }
 stop_section_spinner(){ :; }
 note_activity(){ :; }
 tm_is_running(){ return 1; }
-tm_snapshots_mounted(){ return 1; }
 
 unset -f read_key
 

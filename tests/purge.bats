@@ -101,6 +101,27 @@ setup() {
     [[ "$result" == "2" ]]
 }
 
+@test "filter_nested_artifacts: removes Xcode build subdirectories (Mac projects)" {
+    # Simulate Mac Xcode project with nested .build directories:
+    # ~/www/testapp/build
+    # ~/www/testapp/build/Framework.build
+    # ~/www/testapp/build/Package.build
+    mkdir -p "$HOME/www/testapp/build/Framework.build"
+    mkdir -p "$HOME/www/testapp/build/Package.build"
+
+    result=$(bash -c "
+        source '$PROJECT_ROOT/lib/clean/project.sh'
+        printf '%s\n' \
+            '$HOME/www/testapp/build' \
+            '$HOME/www/testapp/build/Framework.build' \
+            '$HOME/www/testapp/build/Package.build' | \
+        filter_nested_artifacts | wc -l | tr -d ' '
+    ")
+    
+    # Should only keep the top-level 'build' directory, filtering out nested .build dirs
+    [[ "$result" == "1" ]]
+}
+
 # Vendor protection unit tests
 @test "is_rails_project_root: detects valid Rails project" {
     mkdir -p "$HOME/www/test-rails/config"

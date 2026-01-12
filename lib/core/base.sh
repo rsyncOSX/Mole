@@ -512,7 +512,7 @@ declare -a MOLE_TEMP_DIRS=()
 create_temp_file() {
     local temp
     temp=$(mktemp) || return 1
-    MOLE_TEMP_FILES+=("$temp")
+    register_temp_file "$temp"
     echo "$temp"
 }
 
@@ -520,7 +520,7 @@ create_temp_file() {
 create_temp_dir() {
     local temp
     temp=$(mktemp -d) || return 1
-    MOLE_TEMP_DIRS+=("$temp")
+    register_temp_dir "$temp"
     echo "$temp"
 }
 
@@ -538,9 +538,17 @@ register_temp_dir() {
 # Compatible with both BSD mktemp (macOS default) and GNU mktemp (coreutils)
 mktemp_file() {
     local prefix="${1:-mole}"
+    local temp
+    local error_msg
     # Use TMPDIR if set, otherwise /tmp
     # Add .XXXXXX suffix to work with both BSD and GNU mktemp
-    mktemp "${TMPDIR:-/tmp}/${prefix}.XXXXXX"
+    if ! error_msg=$(mktemp "${TMPDIR:-/tmp}/${prefix}.XXXXXX" 2>&1); then
+        echo "Error: Failed to create temporary file: $error_msg" >&2
+        return 1
+    fi
+    temp="$error_msg"
+    register_temp_file "$temp"
+    echo "$temp"
 }
 
 # Cleanup all tracked temp files and directories

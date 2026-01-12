@@ -52,6 +52,39 @@ log_error() { echo -e "${YELLOW}${ICON_ERROR}${NC} $1"; }
 log_admin() { [[ ${VERBOSE} -eq 1 ]] && echo -e "${BLUE}${ICON_ADMIN}${NC} $1"; }
 log_confirm() { [[ ${VERBOSE} -eq 1 ]] && echo -e "${BLUE}${ICON_CONFIRM}${NC} $1"; }
 
+safe_rm() {
+    local target="${1:-}"
+    local tmp_root
+
+    if [[ -z "$target" ]]; then
+        log_error "safe_rm: empty path"
+        return 1
+    fi
+    if [[ ! -e "$target" ]]; then
+        return 0
+    fi
+
+    tmp_root="${TMPDIR:-/tmp}"
+    case "$target" in
+        "$tmp_root" | /tmp)
+            log_error "safe_rm: refusing to remove temp root: $target"
+            return 1
+            ;;
+        "$tmp_root"/* | /tmp/*) ;;
+        *)
+            log_error "safe_rm: refusing to remove non-temp path: $target"
+            return 1
+            ;;
+    esac
+
+    if [[ -d "$target" ]]; then
+        find "$target" -depth \( -type f -o -type l \) -exec rm -f {} + 2> /dev/null || true
+        find "$target" -depth -type d -exec rmdir {} + 2> /dev/null || true
+    else
+        rm -f "$target" 2> /dev/null || true
+    fi
+}
+
 # Install defaults
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="$HOME/.config/mole"
@@ -100,7 +133,16 @@ resolve_source_dir() {
 
     local tmp
     tmp="$(mktemp -d)"
-    trap 'stop_line_spinner 2>/dev/null; rm -rf "$tmp"' EXIT
+
+    # Safe cleanup function for temporary directory
+    cleanup_tmp() {
+        stop_line_spinner 2> /dev/null || true
+        if [[ -z "${tmp:-}" ]]; then
+            return 0
+        fi
+        safe_rm "$tmp"
+    }
+    trap cleanup_tmp EXIT
 
     local branch="${MOLE_VERSION:-}"
     if [[ -z "$branch" ]]; then
@@ -125,7 +167,7 @@ resolve_source_dir() {
 
     start_line_spinner "Fetching Mole source (${branch})..."
     if command -v curl > /dev/null 2>&1; then
-        if curl -fsSL -o "$tmp/mole.tar.gz" "$url" 2> /dev/null; then
+        if curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp/mole.tar.gz" "$url" 2> /dev/null; then
             if tar -xzf "$tmp/mole.tar.gz" -C "$tmp" 2> /dev/null; then
                 stop_line_spinner
 

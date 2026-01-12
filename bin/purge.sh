@@ -47,21 +47,119 @@ start_purge() {
         printf '\033[2J\033[H'
     fi
     printf '\n'
-    echo -e "${PURPLE_BOLD}Purge Project Artifacts${NC}"
 
     # Initialize stats file in user cache directory
     local stats_dir="${XDG_CACHE_HOME:-$HOME/.cache}/mole"
     ensure_user_dir "$stats_dir"
     ensure_user_file "$stats_dir/purge_stats"
     ensure_user_file "$stats_dir/purge_count"
+    ensure_user_file "$stats_dir/purge_scanning"
     echo "0" > "$stats_dir/purge_stats"
     echo "0" > "$stats_dir/purge_count"
+    echo "" > "$stats_dir/purge_scanning"
 }
 
 # Perform the purge
 perform_purge() {
+    local stats_dir="${XDG_CACHE_HOME:-$HOME/.cache}/mole"
+    local monitor_pid=""
+    
+    # Cleanup function
+    cleanup_monitor() {
+        # Remove scanning file to stop monitor
+        rm -f "$stats_dir/purge_scanning" 2> /dev/null || true
+        
+        if [[ -n "$monitor_pid" ]]; then
+            kill "$monitor_pid" 2> /dev/null || true
+            wait "$monitor_pid" 2> /dev/null || true
+        fi
+        if [[ -t 1 ]]; then
+            printf '\r\033[K\n\033[K\033[A'
+        fi
+    }
+    
+    # Set up trap for cleanup
+    trap cleanup_monitor INT TERM
+    
+    # Show scanning with spinner on same line as title
+    if [[ -t 1 ]]; then
+        # Print title first
+        printf '%s' "${PURPLE_BOLD}Purge Project Artifacts${NC} "
+        
+        # Start background monitor with ASCII spinner
+        (
+            local spinner_chars="|/-\\"
+            local spinner_idx=0
+            local last_path=""
+            
+            # Set up trap to exit cleanly
+            trap 'exit 0' INT TERM
+            
+            # Function to truncate path in the middle
+            truncate_path() {
+                local path="$1"
+                local max_len=80
+                
+                if [[ ${#path} -le $max_len ]]; then
+                    echo "$path"
+                    return
+                fi
+                
+                # Calculate how much to show on each side
+                local side_len=$(( (max_len - 3) / 2 ))
+                local start="${path:0:$side_len}"
+                local end="${path: -$side_len}"
+                echo "${start}...${end}"
+            }
+            
+            while [[ -f "$stats_dir/purge_scanning" ]]; do
+                local current_path=$(cat "$stats_dir/purge_scanning" 2> /dev/null || echo "")
+                local display_path=""
+                
+                if [[ -n "$current_path" ]]; then
+                    display_path="${current_path/#$HOME/~}"
+                    display_path=$(truncate_path "$display_path")
+                    last_path="$display_path"
+                elif [[ -n "$last_path" ]]; then
+                    display_path="$last_path"
+                fi
+                
+                # Get current spinner character
+                local spin_char="${spinner_chars:$spinner_idx:1}"
+                spinner_idx=$(( (spinner_idx + 1) % ${#spinner_chars} ))
+                
+                # Show title on first line, spinner and scanning info on second line
+                if [[ -n "$display_path" ]]; then
+                    printf '\r%s\n%s %sScanning %s\033[K\033[A' \
+                        "${PURPLE_BOLD}Purge Project Artifacts${NC}" \
+                        "${BLUE}${spin_char}${NC}" \
+                        "${GRAY}" "$display_path"
+                else
+                    printf '\r%s\n%s %sScanning...\033[K\033[A' \
+                        "${PURPLE_BOLD}Purge Project Artifacts${NC}" \
+                        "${BLUE}${spin_char}${NC}" \
+                        "${GRAY}"
+                fi
+                
+                sleep 0.05
+            done
+            exit 0
+        ) &
+        monitor_pid=$!
+    else
+        echo -e "${PURPLE_BOLD}Purge Project Artifacts${NC}"
+    fi
+    
     clean_project_artifacts
     local exit_code=$?
+    
+    # Clean up
+    trap - INT TERM
+    cleanup_monitor
+    
+    if [[ -t 1 ]]; then
+        echo -e "${PURPLE_BOLD}Purge Project Artifacts${NC}"
+    fi
 
     # Exit codes:
     # 0 = success, show summary
@@ -79,15 +177,11 @@ perform_purge() {
     local total_size_cleaned=0
     local total_items_cleaned=0
 
-    # Read stats from user cache directory
-    local stats_dir="${XDG_CACHE_HOME:-$HOME/.cache}/mole"
-
     if [[ -f "$stats_dir/purge_stats" ]]; then
         total_size_cleaned=$(cat "$stats_dir/purge_stats" 2> /dev/null || echo "0")
         rm -f "$stats_dir/purge_stats"
     fi
 
-    # Read count
     if [[ -f "$stats_dir/purge_count" ]]; then
         total_items_cleaned=$(cat "$stats_dir/purge_count" 2> /dev/null || echo "0")
         rm -f "$stats_dir/purge_count"
