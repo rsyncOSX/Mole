@@ -32,8 +32,6 @@ clean_empty_library_items() {
         safe_clean "${empty_dirs[@]}" "Empty Library folders"
     fi
 
-
-
     # 2. Clean empty subdirectories in Application Support and other key locations
     # Iteratively remove empty directories until no more are found
     local -a key_locations=(
