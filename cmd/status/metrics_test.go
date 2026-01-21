@@ -22,16 +22,16 @@ func TestNewRingBuffer(t *testing.T) {
 				t.Fatal("NewRingBuffer returned nil")
 			}
 			if rb.cap != tt.capacity {
-				t.Errorf("expected capacity %d, got %d", tt.capacity, rb.cap)
+				t.Errorf("NewRingBuffer(%d).cap = %d, want %d", tt.capacity, rb.cap, tt.capacity)
 			}
 			if rb.size != 0 {
-				t.Errorf("expected size 0 for new buffer, got %d", rb.size)
+				t.Errorf("NewRingBuffer(%d).size = %d, want 0", tt.capacity, rb.size)
 			}
 			if rb.index != 0 {
-				t.Errorf("expected index 0 for new buffer, got %d", rb.index)
+				t.Errorf("NewRingBuffer(%d).index = %d, want 0", tt.capacity, rb.index)
 			}
 			if len(rb.data) != tt.capacity {
-				t.Errorf("expected data slice length %d, got %d", tt.capacity, len(rb.data))
+				t.Errorf("len(NewRingBuffer(%d).data) = %d, want %d", tt.capacity, len(rb.data), tt.capacity)
 			}
 		})
 	}
@@ -39,10 +39,10 @@ func TestNewRingBuffer(t *testing.T) {
 
 func TestRingBuffer_EmptyBuffer(t *testing.T) {
 	rb := NewRingBuffer(5)
-	result := rb.Slice()
+	got := rb.Slice()
 
-	if result != nil {
-		t.Errorf("expected nil for empty buffer, got %v", result)
+	if got != nil {
+		t.Errorf("Slice() on empty buffer = %v, want nil", got)
 	}
 }
 
@@ -55,14 +55,14 @@ func TestRingBuffer_AddWithinCapacity(t *testing.T) {
 	rb.Add(3.0)
 
 	if rb.size != 3 {
-		t.Errorf("expected size 3, got %d", rb.size)
+		t.Errorf("size after 3 adds = %d, want 3", rb.size)
 	}
 
-	result := rb.Slice()
-	expected := []float64{1.0, 2.0, 3.0}
+	got := rb.Slice()
+	want := []float64{1.0, 2.0, 3.0}
 
-	if !reflect.DeepEqual(result, expected) {
-		t.Errorf("expected %v, got %v", expected, result)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Slice() = %v, want %v", got, want)
 	}
 }
 
@@ -75,14 +75,14 @@ func TestRingBuffer_ExactCapacity(t *testing.T) {
 	}
 
 	if rb.size != 5 {
-		t.Errorf("expected size 5, got %d", rb.size)
+		t.Errorf("size after filling to capacity = %d, want 5", rb.size)
 	}
 
-	result := rb.Slice()
-	expected := []float64{1.0, 2.0, 3.0, 4.0, 5.0}
+	got := rb.Slice()
+	want := []float64{1.0, 2.0, 3.0, 4.0, 5.0}
 
-	if !reflect.DeepEqual(result, expected) {
-		t.Errorf("expected %v, got %v", expected, result)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Slice() = %v, want %v", got, want)
 	}
 }
 
@@ -97,15 +97,20 @@ func TestRingBuffer_WrapAround(t *testing.T) {
 	}
 
 	if rb.size != 5 {
-		t.Errorf("expected size to cap at 5, got %d", rb.size)
+		t.Errorf("size after wrap-around = %d, want 5", rb.size)
 	}
 
-	result := rb.Slice()
-	// Should return chronological order: 3, 4, 5, 6, 7
-	expected := []float64{3.0, 4.0, 5.0, 6.0, 7.0}
+	// Verify index points to oldest element position
+	if rb.index != 2 {
+		t.Errorf("index after adding 7 elements to cap-5 buffer = %d, want 2", rb.index)
+	}
 
-	if !reflect.DeepEqual(result, expected) {
-		t.Errorf("expected %v, got %v", expected, result)
+	got := rb.Slice()
+	// Should return chronological order: oldest (3) to newest (7)
+	want := []float64{3.0, 4.0, 5.0, 6.0, 7.0}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Slice() = %v, want %v", got, want)
 	}
 }
 
@@ -117,12 +122,12 @@ func TestRingBuffer_MultipleWrapArounds(t *testing.T) {
 		rb.Add(float64(i))
 	}
 
-	result := rb.Slice()
+	got := rb.Slice()
 	// Should have the last 3 values: 8, 9, 10
-	expected := []float64{8.0, 9.0, 10.0}
+	want := []float64{8.0, 9.0, 10.0}
 
-	if !reflect.DeepEqual(result, expected) {
-		t.Errorf("expected %v, got %v", expected, result)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Slice() after 10 adds to cap-3 buffer = %v, want %v", got, want)
 	}
 }
 
@@ -130,16 +135,14 @@ func TestRingBuffer_SingleElementBuffer(t *testing.T) {
 	rb := NewRingBuffer(1)
 
 	rb.Add(5.0)
-	result := rb.Slice()
-	if !reflect.DeepEqual(result, []float64{5.0}) {
-		t.Errorf("expected [5.0], got %v", result)
+	if got := rb.Slice(); !reflect.DeepEqual(got, []float64{5.0}) {
+		t.Errorf("Slice() = %v, want [5.0]", got)
 	}
 
 	// Overwrite the single element
 	rb.Add(10.0)
-	result = rb.Slice()
-	if !reflect.DeepEqual(result, []float64{10.0}) {
-		t.Errorf("expected [10.0], got %v", result)
+	if got := rb.Slice(); !reflect.DeepEqual(got, []float64{10.0}) {
+		t.Errorf("Slice() after overwrite = %v, want [10.0]", got)
 	}
 }
 
@@ -152,9 +155,27 @@ func TestRingBuffer_SliceReturnsNewSlice(t *testing.T) {
 	slice2 := rb.Slice()
 
 	// Modify slice1 and verify slice2 is unaffected
+	// This ensures Slice() returns a copy, not a reference to internal data
 	slice1[0] = 999.0
 
 	if slice2[0] == 999.0 {
-		t.Error("Slice should return a new copy, not a reference to internal data")
+		t.Error("Slice() should return a new copy, not a reference to internal data")
+	}
+}
+
+func TestRingBuffer_NegativeAndZeroValues(t *testing.T) {
+	rb := NewRingBuffer(4)
+
+	// Test that negative and zero values are handled correctly
+	rb.Add(-5.0)
+	rb.Add(0.0)
+	rb.Add(-0.0) // Negative zero should work same as zero
+	rb.Add(3.5)
+
+	got := rb.Slice()
+	want := []float64{-5.0, 0.0, 0.0, 3.5}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Slice() with negative/zero values = %v, want %v", got, want)
 	}
 }
