@@ -19,24 +19,22 @@ clean_deep_system() {
     safe_sudo_find_delete "/private/var/log" "*.gz" "$MOLE_LOG_AGE_DAYS" "f" || true
     log_success "System logs"
     if [[ -d "/Library/Updates" && ! -L "/Library/Updates" ]]; then
-        if ! is_sip_enabled; then
-            local updates_cleaned=0
-            while IFS= read -r -d '' item; do
-                if [[ -z "$item" ]] || [[ ! "$item" =~ ^/Library/Updates/[^/]+$ ]]; then
-                    debug_log "Skipping malformed path: $item"
-                    continue
-                fi
-                local item_flags
-                item_flags=$($STAT_BSD -f%Sf "$item" 2> /dev/null || echo "")
-                if [[ "$item_flags" == *"restricted"* ]]; then
-                    continue
-                fi
-                if safe_sudo_remove "$item"; then
-                    ((updates_cleaned++))
-                fi
-            done < <(find /Library/Updates -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
-            [[ $updates_cleaned -gt 0 ]] && log_success "System library updates"
-        fi
+        local updates_cleaned=0
+        while IFS= read -r -d '' item; do
+            if [[ -z "$item" ]] || [[ ! "$item" =~ ^/Library/Updates/[^/]+$ ]]; then
+                debug_log "Skipping malformed path: $item"
+                continue
+            fi
+            local item_flags
+            item_flags=$($STAT_BSD -f%Sf "$item" 2> /dev/null || echo "")
+            if [[ "$item_flags" == *"restricted"* ]]; then
+                continue
+            fi
+            if safe_sudo_remove "$item"; then
+                ((updates_cleaned++))
+            fi
+        done < <(find /Library/Updates -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
+        [[ $updates_cleaned -gt 0 ]] && log_success "System library updates"
     fi
     if [[ -d "/macOS Install Data" ]]; then
         local mtime=$(get_file_mtime "/macOS Install Data")
