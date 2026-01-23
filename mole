@@ -346,7 +346,13 @@ update_mole() {
 
         if ! printf '%s\n' "$output" | grep -Eq "Updated to latest version|Already on latest version"; then
             local new_version
-            new_version=$("$mole_path" --version 2> /dev/null | awk 'NR==1 && NF {print $NF}' || echo "")
+            new_version=$(printf '%s\n' "$output" | sed -n 's/.*(\([^)]*\)).*/\1/p' | head -1)
+            if [[ -z "$new_version" ]]; then
+                new_version=$("$mole_path" --version 2> /dev/null | awk 'NR==1 && NF {print $NF}' || echo "")
+            fi
+            if [[ -z "$new_version" ]]; then
+                new_version="$latest"
+            fi
             printf '\n%s\n\n' "${GREEN}${ICON_SUCCESS}${NC} Updated to latest version (${new_version:-unknown})"
         else
             printf '\n'

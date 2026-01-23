@@ -180,7 +180,9 @@ log_system_info() {
 
     # Reset debug log file for this new session
     ensure_user_file "$DEBUG_LOG_FILE"
-    : > "$DEBUG_LOG_FILE"
+    if ! : > "$DEBUG_LOG_FILE" 2> /dev/null; then
+        echo -e "${YELLOW}${ICON_WARNING}${NC} Debug log not writable: $DEBUG_LOG_FILE" >&2
+    fi
 
     # Start block in debug log file
     {
