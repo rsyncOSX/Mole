@@ -6,7 +6,7 @@ clean_tool_cache() {
     local description="$1"
     shift
     if [[ "$DRY_RUN" != "true" ]]; then
-        if "$@" >/dev/null 2>&1; then
+        if "$@" > /dev/null 2>&1; then
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $description"
         fi
     else
@@ -16,18 +16,18 @@ clean_tool_cache() {
 }
 # npm/pnpm/yarn/bun caches.
 clean_dev_npm() {
-    if command -v npm >/dev/null 2>&1; then
+    if command -v npm > /dev/null 2>&1; then
         clean_tool_cache "npm cache" npm cache clean --force
         note_activity
     fi
     # Clean pnpm store cache
     local pnpm_default_store=~/Library/pnpm/store
     # Check if pnpm is actually usable (not just Corepack shim)
-    if command -v pnpm >/dev/null 2>&1 && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --version >/dev/null 2>&1; then
+    if command -v pnpm > /dev/null 2>&1 && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --version > /dev/null 2>&1; then
         COREPACK_ENABLE_DOWNLOAD_PROMPT=0 clean_tool_cache "pnpm cache" pnpm store prune
         local pnpm_store_path
         start_section_spinner "Checking store path..."
-        pnpm_store_path=$(COREPACK_ENABLE_DOWNLOAD_PROMPT=0 run_with_timeout 2 pnpm store path 2>/dev/null) || pnpm_store_path=""
+        pnpm_store_path=$(COREPACK_ENABLE_DOWNLOAD_PROMPT=0 run_with_timeout 2 pnpm store path 2> /dev/null) || pnpm_store_path=""
         stop_section_spinner
         if [[ -n "$pnpm_store_path" && "$pnpm_store_path" != "$pnpm_default_store" ]]; then
             safe_clean "$pnpm_default_store"/* "Orphaned pnpm store"
@@ -44,7 +44,7 @@ clean_dev_npm() {
 }
 # Python/pip ecosystem caches.
 clean_dev_python() {
-    if command -v pip3 >/dev/null 2>&1; then
+    if command -v pip3 > /dev/null 2>&1; then
         clean_tool_cache "pip cache" bash -c 'pip3 cache purge > /dev/null 2>&1 || true'
         note_activity
     fi
@@ -64,7 +64,7 @@ clean_dev_python() {
 }
 # Go build/module caches.
 clean_dev_go() {
-    if command -v go >/dev/null 2>&1; then
+    if command -v go > /dev/null 2>&1; then
         clean_tool_cache "Go cache" bash -c 'go clean -modcache > /dev/null 2>&1 || true; go clean -cache > /dev/null 2>&1 || true'
         note_activity
     fi
@@ -89,7 +89,7 @@ check_multiple_versions() {
     fi
 
     local count
-    count=$(find "$dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+    count=$(find "$dir" -mindepth 1 -maxdepth 1 -type d 2> /dev/null | wc -l | tr -d ' ')
 
     if [[ "$count" -gt 1 ]]; then
         note_activity
@@ -103,7 +103,7 @@ check_multiple_versions() {
 
 # Check for multiple Rust toolchains.
 check_rust_toolchains() {
-    command -v rustup >/dev/null 2>&1 || return 0
+    command -v rustup > /dev/null 2>&1 || return 0
 
     check_multiple_versions \
         "$HOME/.rustup/toolchains" \
@@ -112,11 +112,11 @@ check_rust_toolchains() {
 }
 # Docker caches (guarded by daemon check).
 clean_dev_docker() {
-    if command -v docker >/dev/null 2>&1; then
+    if command -v docker > /dev/null 2>&1; then
         if [[ "$DRY_RUN" != "true" ]]; then
             start_section_spinner "Checking Docker daemon..."
             local docker_running=false
-            if run_with_timeout 3 docker info >/dev/null 2>&1; then
+            if run_with_timeout 3 docker info > /dev/null 2>&1; then
                 docker_running=true
             fi
             stop_section_spinner
@@ -134,7 +134,7 @@ clean_dev_docker() {
 }
 # Nix garbage collection.
 clean_dev_nix() {
-    if command -v nix-collect-garbage >/dev/null 2>&1; then
+    if command -v nix-collect-garbage > /dev/null 2>&1; then
         if [[ "$DRY_RUN" != "true" ]]; then
             clean_tool_cache "Nix garbage collection" nix-collect-garbage --delete-older-than 30d
         else
@@ -176,13 +176,13 @@ check_android_ndk() {
 clean_dev_mobile() {
     check_android_ndk
 
-    if command -v xcrun >/dev/null 2>&1; then
+    if command -v xcrun > /dev/null 2>&1; then
         debug_log "Checking for unavailable Xcode simulators"
         local unavailable_before=0
         local unavailable_after=0
         local removed_unavailable=0
 
-        unavailable_before=$(xcrun simctl list devices unavailable 2>/dev/null | command awk '/\(unavailable/ { count++ } END { print count+0 }' || echo "0")
+        unavailable_before=$(xcrun simctl list devices unavailable 2> /dev/null | command awk '/\(unavailable/ { count++ } END { print count+0 }' || echo "0")
         [[ "$unavailable_before" =~ ^[0-9]+$ ]] || unavailable_before=0
 
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -193,9 +193,9 @@ clean_dev_mobile() {
             fi
         else
             start_section_spinner "Checking unavailable simulators..."
-            if xcrun simctl delete unavailable >/dev/null 2>&1; then
+            if xcrun simctl delete unavailable > /dev/null 2>&1; then
                 stop_section_spinner
-                unavailable_after=$(xcrun simctl list devices unavailable 2>/dev/null | command awk '/\(unavailable/ { count++ } END { print count+0 }' || echo "0")
+                unavailable_after=$(xcrun simctl list devices unavailable 2> /dev/null | command awk '/\(unavailable/ { count++ } END { print count+0 }' || echo "0")
                 [[ "$unavailable_after" =~ ^[0-9]+$ ]] || unavailable_after=0
 
                 removed_unavailable=$((unavailable_before - unavailable_after))
@@ -270,7 +270,7 @@ clean_dev_jetbrains_toolbox() {
     local -a product_dirs=()
     while IFS= read -r -d '' product_dir; do
         product_dirs+=("$product_dir")
-    done < <(command find "$toolbox_root" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+    done < <(command find "$toolbox_root" -mindepth 1 -maxdepth 1 -type d -print0 2> /dev/null)
 
     if [[ ${#product_dirs[@]} -eq 0 ]]; then
         _restore_whitelist
@@ -283,7 +283,7 @@ clean_dev_jetbrains_toolbox() {
             local current_link=""
             local current_real=""
             if [[ -L "$channel_dir/current" ]]; then
-                current_link=$(readlink "$channel_dir/current" 2>/dev/null || true)
+                current_link=$(readlink "$channel_dir/current" 2> /dev/null || true)
                 if [[ -n "$current_link" ]]; then
                     if [[ "$current_link" == /* ]]; then
                         current_real="$current_link"
@@ -307,7 +307,7 @@ clean_dev_jetbrains_toolbox() {
                 [[ ! "$name" =~ ^[0-9] ]] && continue
 
                 version_dirs+=("$version_dir")
-            done < <(command find "$channel_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+            done < <(command find "$channel_dir" -mindepth 1 -maxdepth 1 -type d -print0 2> /dev/null)
 
             [[ ${#version_dirs[@]} -eq 0 ]] && continue
 
@@ -318,7 +318,7 @@ clean_dev_jetbrains_toolbox() {
             done < <(
                 for version_dir in "${version_dirs[@]}"; do
                     local mtime
-                    mtime=$(stat -f%m "$version_dir" 2>/dev/null || echo "0")
+                    mtime=$(stat -f%m "$version_dir" 2> /dev/null || echo "0")
                     printf '%s %s\n' "$mtime" "$version_dir"
                 done | sort -rn
             )
@@ -338,7 +338,7 @@ clean_dev_jetbrains_toolbox() {
                 note_activity
                 ((idx++))
             done
-        done < <(command find "$product_dir" -mindepth 1 -maxdepth 1 -type d -name "ch-*" -print0 2>/dev/null)
+        done < <(command find "$product_dir" -mindepth 1 -maxdepth 1 -type d -name "ch-*" -print0 2> /dev/null)
     done
 
     _restore_whitelist
@@ -493,7 +493,7 @@ clean_developer_tools() {
         if [[ -d "$lock_dir" && -w "$lock_dir" ]]; then
             safe_clean "$lock_dir"/* "Homebrew lock files"
         elif [[ -d "$lock_dir" ]]; then
-            if find "$lock_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+            if find "$lock_dir" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null | grep -q .; then
                 debug_log "Skipping read-only Homebrew locks in $lock_dir"
             fi
         fi
