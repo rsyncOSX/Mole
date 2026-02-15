@@ -10,7 +10,7 @@ if [[ ! -f "$PROJECT_ROOT/lib/core/app_protection.sh" ]]; then
     PROJECT_ROOT="$(pwd)"
     SCRIPT_DIR="$PROJECT_ROOT/tests"
 fi
-cd "$PROJECT_ROOT"
+cd "$PROJECT_ROOT" || exit 1
 
 source_crlf_safe() {
     local f="$1"
