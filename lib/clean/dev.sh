@@ -319,7 +319,6 @@ clean_xcode_simulator_runtime_volumes() {
         [[ -n "$line" ]] && mount_points+=("$line")
     done < <(_sim_runtime_mount_points)
 
-    local -a size_values=()
     local -a entry_statuses=()
     local -a sorted_candidates=()
     local sorted
@@ -327,39 +326,48 @@ clean_xcode_simulator_runtime_volumes() {
         [[ -n "$sorted" ]] && sorted_candidates+=("$sorted")
     done < <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort)
 
-    local idx=0
+    echo -e "  ${GRAY}${ICON_LIST}${NC} Xcode runtime volumes · scanning ${#sorted_candidates[@]} entries"
+    local runtime_scan_spinner=false
+    if [[ -t 1 ]]; then
+        start_section_spinner "Scanning Xcode runtime volumes..."
+        runtime_scan_spinner=true
+    fi
+
+    local in_use_count=0
+    local unused_count=0
     for candidate in "${sorted_candidates[@]}"; do
         local status="UNUSED"
         if _sim_runtime_is_path_in_use "$candidate" "${mount_points[@]}"; then
             status="IN_USE"
-        fi
-
-        local size_kb
-        size_kb=$(_sim_runtime_size_kb "$candidate")
-        size_values+=("$size_kb")
-        entry_statuses+=("$status")
-        idx=$((idx + 1))
-    done
-
-    local in_use_count=0
-    local unused_count=0
-    local in_use_kb=0
-    local unused_kb=0
-    local status
-    local i=0
-    for status in "${entry_statuses[@]}"; do
-        local entry_size_kb="${size_values[$i]:-0}"
-        if [[ "$status" == "IN_USE" ]]; then
             in_use_count=$((in_use_count + 1))
-            in_use_kb=$((in_use_kb + entry_size_kb))
         else
             unused_count=$((unused_count + 1))
-            unused_kb=$((unused_kb + entry_size_kb))
         fi
-        i=$((i + 1))
+        entry_statuses+=("$status")
     done
 
     if [[ "$DRY_RUN" == "true" ]]; then
+        local -a size_values=()
+        local in_use_kb=0
+        local unused_kb=0
+        local i=0
+        for candidate in "${sorted_candidates[@]}"; do
+            local size_kb
+            size_kb=$(_sim_runtime_size_kb "$candidate")
+            size_values+=("$size_kb")
+            local status="${entry_statuses[$i]:-UNUSED}"
+            if [[ "$status" == "IN_USE" ]]; then
+                in_use_kb=$((in_use_kb + size_kb))
+            else
+                unused_kb=$((unused_kb + size_kb))
+            fi
+            i=$((i + 1))
+        done
+        if [[ "$runtime_scan_spinner" == "true" ]]; then
+            stop_section_spinner
+            runtime_scan_spinner=false
+        fi
+
         echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Xcode runtime volumes · ${unused_count} unused, ${in_use_count} in use"
         local dryrun_total_kb=$((unused_kb + in_use_kb))
         local dryrun_total_human
@@ -406,8 +414,6 @@ clean_xcode_simulator_runtime_volumes() {
 
     # Auto-clean all UNUSED runtime volumes (no user selection)
     local -a selected_paths=()
-    local -a selected_sizes_kb=()
-    local selected_total_kb=0
     local skipped_protected=0
     local i=0
     for ((i = 0; i < ${#sorted_candidates[@]}; i++)); do
@@ -420,9 +426,12 @@ clean_xcode_simulator_runtime_volumes() {
             continue
         fi
         selected_paths+=("$candidate_path")
-        selected_sizes_kb+=("${size_values[$i]:-0}")
-        selected_total_kb=$((selected_total_kb + ${size_values[$i]:-0}))
     done
+
+    if [[ "$runtime_scan_spinner" == "true" ]]; then
+        stop_section_spinner
+        runtime_scan_spinner=false
+    fi
 
     if [[ ${#selected_paths[@]} -eq 0 ]]; then
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode runtime volumes · nothing to clean"
@@ -438,24 +447,21 @@ clean_xcode_simulator_runtime_volumes() {
         fi
     fi
 
-    local selected_human
-    selected_human=$(bytes_to_human "$((selected_total_kb * 1024))")
-    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode runtime volumes · cleaning ${#selected_paths[@]} unused, ${selected_human}"
+    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode runtime volumes · cleaning ${#selected_paths[@]} unused"
     if [[ $skipped_protected -gt 0 ]]; then
         echo -e "  ${GRAY}${ICON_WARNING}${NC} Xcode runtime volumes · skipped ${skipped_protected} protected items"
     fi
 
     local removed_count=0
     local removed_size_kb=0
-    local i=0
     local selected_path
     for selected_path in "${selected_paths[@]}"; do
-        local selected_size_kb="${selected_sizes_kb[$i]:-0}"
+        local selected_size_kb=0
+        selected_size_kb=$(_sim_runtime_size_kb "$selected_path")
         if safe_sudo_remove "$selected_path"; then
             removed_count=$((removed_count + 1))
             removed_size_kb=$((removed_size_kb + selected_size_kb))
         fi
-        i=$((i + 1))
     done
 
     if [[ $removed_count -gt 0 ]]; then

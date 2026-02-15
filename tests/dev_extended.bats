@@ -253,3 +253,49 @@ EOF
     [[ "$output" == *"/241.1"* ]]
     [[ "$output" != *"/241.2"* ]]
 }
+
+@test "clean_xcode_simulator_runtime_volumes shows scan progress and skips sizing in-use volumes" {
+    local volumes_root="$HOME/sim-volumes"
+    local cryptex_root="$HOME/sim-cryptex"
+    mkdir -p "$volumes_root/in-use-runtime" "$volumes_root/unused-runtime"
+    mkdir -p "$cryptex_root"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_XCODE_SIM_RUNTIME_VOLUMES_ROOT="$volumes_root" MOLE_XCODE_SIM_RUNTIME_CRYPTEX_ROOT="$cryptex_root" bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+
+size_log="$HOME/size-calls.log"
+: > "$size_log"
+DRY_RUN=false
+
+note_activity() { :; }
+has_sudo_session() { return 0; }
+is_path_whitelisted() { return 1; }
+should_protect_path() { return 1; }
+_sim_runtime_mount_points() {
+    printf '%s\n' "$MOLE_XCODE_SIM_RUNTIME_VOLUMES_ROOT/in-use-runtime"
+}
+_sim_runtime_size_kb() {
+    local target_path="$1"
+    echo "$target_path" >> "$size_log"
+    echo "1"
+}
+safe_sudo_remove() {
+    local target_path="$1"
+    echo "REMOVE:$target_path"
+    return 0
+}
+
+clean_xcode_simulator_runtime_volumes
+echo "SIZE_LOG_START"
+cat "$size_log"
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Xcode runtime volumes · scanning 2 entries"* ]]
+    [[ "$output" == *"Xcode runtime volumes · cleaning 1 unused"* ]]
+    [[ "$output" == *"REMOVE:$volumes_root/unused-runtime"* ]]
+    [[ "$output" == *"$volumes_root/unused-runtime"* ]]
+    [[ "$output" != *"$volumes_root/in-use-runtime"* ]]
+}

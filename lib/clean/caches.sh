@@ -149,6 +149,7 @@ clean_project_caches() {
         fi
         [[ "$has_dev_projects" == "false" ]] && return 0
     fi
+    echo -e "  ${GRAY}${ICON_LIST}${NC} Project caches · scanning for Next.js/Python/Flutter artifacts"
     if [[ -t 1 ]]; then
         MOLE_SPINNER_PREFIX="  "
         start_inline_spinner "Searching project caches..."
