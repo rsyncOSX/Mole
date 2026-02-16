@@ -130,7 +130,7 @@ type cardData struct {
 	lines []string
 }
 
-func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int, catHidden bool) string {
+func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int, catHidden bool) (string, string) {
 	title := titleStyle.Render("Status")
 
 	scoreStyle := getScoreStyle(m.HealthScore)
@@ -171,7 +171,7 @@ func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int
 
 	headerLine := title + "  " + scoreText + "  " + strings.Join(infoParts, " · ")
 
-	// Show cat unless hidden
+	// Show cat unless hidden - render mole centered below header
 	var mole string
 	if !catHidden {
 		mole = getMoleFrame(animFrame, termWidth)
@@ -179,14 +179,14 @@ func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int
 
 	if errMsg != "" {
 		if mole == "" {
-			return lipgloss.JoinVertical(lipgloss.Left, headerLine, "", dangerStyle.Render("ERROR: "+errMsg), "")
+			return lipgloss.JoinVertical(lipgloss.Left, headerLine, "", dangerStyle.Render("ERROR: "+errMsg)), ""
 		}
-		return lipgloss.JoinVertical(lipgloss.Left, headerLine, "", mole, dangerStyle.Render("ERROR: "+errMsg), "")
+		return lipgloss.JoinVertical(lipgloss.Left, headerLine, "", mole, dangerStyle.Render("ERROR: "+errMsg)), mole
 	}
 	if mole == "" {
-		return headerLine
+		return headerLine, ""
 	}
-	return headerLine + "\n" + mole
+	return headerLine, mole
 }
 
 func getScoreStyle(score int) lipgloss.Style {

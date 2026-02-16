@@ -139,7 +139,7 @@ func (m model) View() string {
 		return "Loading..."
 	}
 
-	header := renderHeader(m.metrics, m.errMessage, m.animFrame, m.width, m.catHidden)
+	header, mole := renderHeader(m.metrics, m.errMessage, m.animFrame, m.width, m.catHidden)
 	cardWidth := 0
 	if m.width > 80 {
 		cardWidth = max(24, m.width/2-4)
@@ -154,20 +154,25 @@ func (m model) View() string {
 			}
 			rendered = append(rendered, renderCard(c, cardWidth, 0))
 		}
-		result := header + "\n" + lipgloss.JoinVertical(lipgloss.Left, rendered...)
-		// Add extra newline if cat is hidden for better spacing
-		if m.catHidden {
-			result = header + "\n\n" + lipgloss.JoinVertical(lipgloss.Left, rendered...)
+		// Combine header, mole, and cards with consistent spacing
+		var content []string
+		content = append(content, header)
+		if mole != "" {
+			content = append(content, mole)
 		}
-		return result
+		content = append(content, lipgloss.JoinVertical(lipgloss.Left, rendered...))
+		return lipgloss.JoinVertical(lipgloss.Left, content...)
 	}
 
 	twoCol := renderTwoColumns(cards, m.width)
-	// Add extra newline if cat is hidden for better spacing
-	if m.catHidden {
-		return header + "\n\n" + twoCol
+	// Combine header, mole, and cards with consistent spacing
+	var content []string
+	content = append(content, header)
+	if mole != "" {
+		content = append(content, mole)
 	}
-	return header + "\n" + twoCol
+	content = append(content, twoCol)
+	return lipgloss.JoinVertical(lipgloss.Left, content...)
 }
 
 func (m model) collectCmd() tea.Cmd {
