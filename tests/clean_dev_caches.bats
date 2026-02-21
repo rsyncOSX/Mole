@@ -133,6 +133,32 @@ EOF
     [[ "$output" != *"(custom path)"* ]]
 }
 
+@test "clean_dev_npm treats default cache path with trailing slash as same path" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+clean_tool_cache() { :; }
+safe_clean() { echo "$2|$1"; }
+note_activity() { :; }
+run_with_timeout() { shift; "$@"; }
+npm() {
+    if [[ "$1" == "config" && "$2" == "get" && "$3" == "cache" ]]; then
+        echo "$HOME/.npm/"
+        return 0
+    fi
+    return 0
+}
+clean_dev_npm
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"npm cache directory|$HOME/.npm/_cacache/*"* ]]
+    [[ "$output" != *"(custom path)"* ]]
+}
+
 @test "clean_dev_docker skips when daemon not running" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MO_DEBUG=1 DRY_RUN=false bash --noprofile --norc <<'EOF'
 set -euo pipefail

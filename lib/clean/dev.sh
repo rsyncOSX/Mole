@@ -44,8 +44,18 @@ clean_dev_npm() {
         safe_clean "$npm_default_cache/${npm_residual_dirs[$i]}"/* "${npm_descriptions[$i]}"
     done
 
+    # Normalize paths for comparison (remove trailing slash + resolve symlinked dirs)
+    local npm_cache_path_normalized="${npm_cache_path%/}"
+    local npm_default_cache_normalized="${npm_default_cache%/}"
+    if [[ -d "$npm_cache_path_normalized" ]]; then
+        npm_cache_path_normalized=$(cd "$npm_cache_path_normalized" 2> /dev/null && pwd -P) || npm_cache_path_normalized="${npm_cache_path%/}"
+    fi
+    if [[ -d "$npm_default_cache_normalized" ]]; then
+        npm_default_cache_normalized=$(cd "$npm_default_cache_normalized" 2> /dev/null && pwd -P) || npm_default_cache_normalized="${npm_default_cache%/}"
+    fi
+
     # Clean custom npm cache path (if different from default)
-    if [[ "$npm_cache_path" != "$npm_default_cache" ]]; then
+    if [[ "$npm_cache_path_normalized" != "$npm_default_cache_normalized" ]]; then
         for i in "${!npm_residual_dirs[@]}"; do
             safe_clean "$npm_cache_path/${npm_residual_dirs[$i]}"/* "${npm_descriptions[$i]} (custom path)"
         done
@@ -600,7 +610,9 @@ clean_dev_jvm() {
     # Source Maven cleanup module (requires bash for BASH_SOURCE)
     # shellcheck disable=SC1091
     source "$(dirname "${BASH_SOURCE[0]}")/maven.sh" 2> /dev/null || true
-    clean_maven_repository
+    if declare -f clean_maven_repository > /dev/null 2>&1; then
+        clean_maven_repository
+    fi
     safe_clean ~/.sbt/* "SBT cache"
     safe_clean ~/.ivy2/cache/* "Ivy cache"
     safe_clean ~/.gradle/caches/* "Gradle cache"
