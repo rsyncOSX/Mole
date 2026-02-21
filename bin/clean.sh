@@ -677,8 +677,6 @@ safe_clean() {
                         echo "$display_path  # $size_human" >> "$EXPORT_LIST_FILE"
                     fi
                 done
-
-                rm -f "$paths_temp"
             fi
         else
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $label${NC}, ${GREEN}$size_human${NC}"
@@ -895,9 +893,9 @@ perform_cleanup() {
     # Allow per-section failures without aborting the full run.
     set +e
 
-    # ===== 1. Deep system cleanup (if admin) =====
+    # ===== 1. System =====
     if [[ "$SYSTEM_CLEAN" == "true" ]]; then
-        start_section "Deep system"
+        start_section "System"
         clean_deep_system
         clean_local_snapshots
         end_section
@@ -910,84 +908,71 @@ perform_cleanup() {
         done
     fi
 
+    # ===== 2. User essentials =====
     start_section "User essentials"
     clean_user_essentials
+    clean_finder_metadata
     scan_external_volumes
     end_section
 
-    start_section "Finder metadata"
-    clean_finder_metadata
+    # ===== 3. App caches (merged sandboxed and standard app caches) =====
+    start_section "App caches"
+    clean_app_caches
     end_section
 
-    # ===== 3. macOS system caches =====
-    start_section "macOS system caches"
-    clean_macos_system_caches
-    clean_recent_items
-    clean_mail_downloads
-    end_section
-
-    # ===== 4. Sandboxed app caches =====
-    start_section "Sandboxed app caches"
-    clean_sandboxed_app_caches
-    end_section
-
-    # ===== 5. Browsers =====
+    # ===== 4. Browsers =====
     start_section "Browsers"
     clean_browsers
     end_section
 
-    # ===== 6. Cloud storage =====
-    start_section "Cloud storage"
+    # ===== 5. Cloud & Office =====
+    start_section "Cloud & Office"
     clean_cloud_storage
-    end_section
-
-    # ===== 7. Office applications =====
-    start_section "Office applications"
     clean_office_applications
     end_section
 
-    # ===== 8. Developer tools =====
+    # ===== 6. Developer tools (merged CLI and GUI tooling) =====
     start_section "Developer tools"
     clean_developer_tools
     end_section
 
-    # ===== 9. Development applications =====
-    start_section "Development applications"
+    # ===== 7. Applications =====
+    start_section "Applications"
     clean_user_gui_applications
     end_section
 
-    # ===== 10. Virtualization tools =====
-    start_section "Virtual machine tools"
+    # ===== 8. Virtualization =====
+    start_section "Virtualization"
     clean_virtualization_tools
     end_section
 
-    # ===== 11. Application Support logs and caches cleanup =====
+    # ===== 9. Application Support =====
     start_section "Application Support"
     clean_application_support_logs
     end_section
 
-    # ===== 12. Orphaned app data cleanup (60+ days inactive, skip protected vendors) =====
-    start_section "Uninstalled app data"
+    # ===== 10. Orphaned data =====
+    start_section "Orphaned data"
     clean_orphaned_app_data
     clean_orphaned_system_services
     clean_orphaned_launch_agents
     end_section
 
-    # ===== 13. Apple Silicon optimizations =====
+    # ===== 11. Apple Silicon =====
     clean_apple_silicon_caches
 
-    # ===== 14. iOS device backups =====
-    start_section "iOS device backups"
+    # ===== 12. Device backups =====
+    start_section "Device backups"
     check_ios_device_backups
     end_section
 
-    # ===== 15. Time Machine incomplete backups =====
-    start_section "Time Machine incomplete backups"
+    # ===== 13. Time Machine =====
+    start_section "Time Machine"
     clean_time_machine_failed_backups
     end_section
 
-    # ===== 16. Large files to review (report only) =====
-    start_section "Large files to review"
+    # ===== 14. Large files =====
+    start_section "Large files"
     check_large_file_candidates
     end_section
 

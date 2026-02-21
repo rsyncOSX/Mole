@@ -35,6 +35,79 @@ clean_user_essentials() {
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Trash · already empty"
         fi
     fi
+
+    # Recent items
+    _clean_recent_items
+
+    # Mail downloads
+    _clean_mail_downloads
+}
+
+# Internal: Remove recent items lists.
+_clean_recent_items() {
+    local shared_dir="$HOME/Library/Application Support/com.apple.sharedfilelist"
+    local -a recent_lists=(
+        "$shared_dir/com.apple.LSSharedFileList.RecentApplications.sfl2"
+        "$shared_dir/com.apple.LSSharedFileList.RecentDocuments.sfl2"
+        "$shared_dir/com.apple.LSSharedFileList.RecentServers.sfl2"
+        "$shared_dir/com.apple.LSSharedFileList.RecentHosts.sfl2"
+        "$shared_dir/com.apple.LSSharedFileList.RecentApplications.sfl"
+        "$shared_dir/com.apple.LSSharedFileList.RecentDocuments.sfl"
+        "$shared_dir/com.apple.LSSharedFileList.RecentServers.sfl"
+        "$shared_dir/com.apple.LSSharedFileList.RecentHosts.sfl"
+    )
+    if [[ -d "$shared_dir" ]]; then
+        for sfl_file in "${recent_lists[@]}"; do
+            [[ -e "$sfl_file" ]] && safe_clean "$sfl_file" "Recent items list" || true
+        done
+    fi
+    safe_clean ~/Library/Preferences/com.apple.recentitems.plist "Recent items preferences" || true
+}
+
+# Internal: Clean old mail downloads.
+_clean_mail_downloads() {
+    local mail_age_days=${MOLE_MAIL_AGE_DAYS:-}
+    if ! [[ "$mail_age_days" =~ ^[0-9]+$ ]]; then
+        mail_age_days=30
+    fi
+    local -a mail_dirs=(
+        "$HOME/Library/Mail Downloads"
+        "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads"
+    )
+    local count=0
+    local cleaned_kb=0
+    for target_path in "${mail_dirs[@]}"; do
+        if [[ -d "$target_path" ]]; then
+            local dir_size_kb=0
+            dir_size_kb=$(get_path_size_kb "$target_path")
+            if ! [[ "$dir_size_kb" =~ ^[0-9]+$ ]]; then
+                dir_size_kb=0
+            fi
+            local min_kb="${MOLE_MAIL_DOWNLOADS_MIN_KB:-}"
+            if ! [[ "$min_kb" =~ ^[0-9]+$ ]]; then
+                min_kb=5120
+            fi
+            if [[ "$dir_size_kb" -lt "$min_kb" ]]; then
+                continue
+            fi
+            while IFS= read -r -d '' file_path; do
+                if [[ -f "$file_path" ]]; then
+                    local file_size_kb
+                    file_size_kb=$(get_path_size_kb "$file_path")
+                    if safe_remove "$file_path" true; then
+                        ((count++))
+                        ((cleaned_kb += file_size_kb))
+                    fi
+                fi
+            done < <(command find "$target_path" -type f -mtime +"$mail_age_days" -print0 2> /dev/null || true)
+        fi
+    done
+    if [[ $count -gt 0 ]]; then
+        local cleaned_mb
+        cleaned_mb=$(echo "$cleaned_kb" | awk '{printf "%.1f", $1/1024}' || echo "0.0")
+        echo "  ${GREEN}${ICON_SUCCESS}${NC} Cleaned $count mail attachments, about ${cleaned_mb}MB"
+        note_activity
+    fi
 }
 
 # Remove old Google Chrome versions while keeping Current.
@@ -321,9 +394,9 @@ clean_finder_metadata() {
     fi
     clean_ds_store_tree "$HOME" "Home directory, .DS_Store"
 }
-# macOS system caches and user-level leftovers.
-clean_macos_system_caches() {
-    # safe_clean already checks protected paths.
+# App caches (merged: macOS system caches + Sandboxed apps).
+clean_app_caches() {
+    # macOS system caches (merged from clean_macos_system_caches)
     safe_clean ~/Library/Saved\ Application\ State/* "Saved application states" || true
     safe_clean ~/Library/Caches/com.apple.photoanalysisd "Photo analysis cache" || true
     safe_clean ~/Library/Caches/com.apple.akd "Apple ID cache" || true
@@ -340,70 +413,8 @@ clean_macos_system_caches() {
     safe_clean ~/Library/Suggestions/* "Siri suggestions cache" || true
     safe_clean ~/Library/Calendars/Calendar\ Cache "Calendar cache" || true
     safe_clean ~/Library/Application\ Support/AddressBook/Sources/*/Photos.cache "Address Book photo cache" || true
-}
-clean_recent_items() {
-    local shared_dir="$HOME/Library/Application Support/com.apple.sharedfilelist"
-    local -a recent_lists=(
-        "$shared_dir/com.apple.LSSharedFileList.RecentApplications.sfl2"
-        "$shared_dir/com.apple.LSSharedFileList.RecentDocuments.sfl2"
-        "$shared_dir/com.apple.LSSharedFileList.RecentServers.sfl2"
-        "$shared_dir/com.apple.LSSharedFileList.RecentHosts.sfl2"
-        "$shared_dir/com.apple.LSSharedFileList.RecentApplications.sfl"
-        "$shared_dir/com.apple.LSSharedFileList.RecentDocuments.sfl"
-        "$shared_dir/com.apple.LSSharedFileList.RecentServers.sfl"
-        "$shared_dir/com.apple.LSSharedFileList.RecentHosts.sfl"
-    )
-    if [[ -d "$shared_dir" ]]; then
-        for sfl_file in "${recent_lists[@]}"; do
-            [[ -e "$sfl_file" ]] && safe_clean "$sfl_file" "Recent items list" || true
-        done
-    fi
-    safe_clean ~/Library/Preferences/com.apple.recentitems.plist "Recent items preferences" || true
-}
-clean_mail_downloads() {
-    local mail_age_days=${MOLE_MAIL_AGE_DAYS:-}
-    if ! [[ "$mail_age_days" =~ ^[0-9]+$ ]]; then
-        mail_age_days=30
-    fi
-    local -a mail_dirs=(
-        "$HOME/Library/Mail Downloads"
-        "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads"
-    )
-    local count=0
-    local cleaned_kb=0
-    for target_path in "${mail_dirs[@]}"; do
-        if [[ -d "$target_path" ]]; then
-            local dir_size_kb=0
-            dir_size_kb=$(get_path_size_kb "$target_path")
-            if ! [[ "$dir_size_kb" =~ ^[0-9]+$ ]]; then
-                dir_size_kb=0
-            fi
-            local min_kb="${MOLE_MAIL_DOWNLOADS_MIN_KB:-}"
-            if ! [[ "$min_kb" =~ ^[0-9]+$ ]]; then
-                min_kb=5120
-            fi
-            if [[ "$dir_size_kb" -lt "$min_kb" ]]; then
-                continue
-            fi
-            while IFS= read -r -d '' file_path; do
-                if [[ -f "$file_path" ]]; then
-                    local file_size_kb=$(get_path_size_kb "$file_path")
-                    if safe_remove "$file_path" true; then
-                        ((count++))
-                        ((cleaned_kb += file_size_kb))
-                    fi
-                fi
-            done < <(command find "$target_path" -type f -mtime +"$mail_age_days" -print0 2> /dev/null || true)
-        fi
-    done
-    if [[ $count -gt 0 ]]; then
-        local cleaned_mb=$(echo "$cleaned_kb" | awk '{printf "%.1f", $1/1024}' || echo "0.0")
-        echo "  ${GREEN}${ICON_SUCCESS}${NC} Cleaned $count mail attachments, about ${cleaned_mb}MB"
-        note_activity
-    fi
-}
-# Sandboxed app caches.
-clean_sandboxed_app_caches() {
+
+    # Sandboxed app caches
     stop_section_spinner
     safe_clean ~/Library/Containers/com.apple.wallpaper.agent/Data/Library/Caches/* "Wallpaper agent cache"
     safe_clean ~/Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches/* "Media analysis cache"
@@ -415,7 +426,7 @@ clean_sandboxed_app_caches() {
     local total_size=0
     local cleaned_count=0
     local found_any=false
-    # Use nullglob to avoid literal globs.
+
     local _ng_state
     _ng_state=$(shopt -p nullglob || true)
     shopt -s nullglob
@@ -424,8 +435,10 @@ clean_sandboxed_app_caches() {
     done
     eval "$_ng_state"
     stop_section_spinner
+
     if [[ "$found_any" == "true" ]]; then
-        local size_human=$(bytes_to_human "$((total_size * 1024))")
+        local size_human
+        size_human=$(bytes_to_human "$((total_size * 1024))")
         if [[ "$DRY_RUN" == "true" ]]; then
             echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Sandboxed app caches${NC}, ${YELLOW}$size_human dry${NC}"
         else
@@ -444,7 +457,8 @@ process_container_cache() {
     local container_dir="$1"
     [[ -d "$container_dir" ]] || return 0
     [[ -L "$container_dir" ]] && return 0
-    local bundle_id=$(basename "$container_dir")
+    local bundle_id
+    bundle_id=$(basename "$container_dir")
     if is_critical_system_component "$bundle_id"; then
         return 0
     fi
@@ -456,23 +470,17 @@ process_container_cache() {
     [[ -L "$cache_dir" ]] && return 0
     # Fast non-empty check.
     if find "$cache_dir" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null | grep -q .; then
-        local size=$(get_path_size_kb "$cache_dir")
+        local size
+        size=$(get_path_size_kb "$cache_dir")
         ((total_size += size))
         found_any=true
         ((cleaned_count++))
         if [[ "$DRY_RUN" != "true" ]]; then
-            # For directories with many files, use find -delete for performance
-            if ! find "$cache_dir" -mindepth 1 -delete 2> /dev/null; then
-                # Fallback: try item-by-item if find fails
-                local _ng_state
-                _ng_state=$(shopt -p nullglob || true)
-                shopt -s nullglob
-                for item in "$cache_dir"/*; do
-                    [[ -e "$item" ]] || continue
-                    safe_remove "$item" true || true
-                done
-                eval "$_ng_state"
-            fi
+            local item
+            while IFS= read -r -d '' item; do
+                [[ -e "$item" ]] || continue
+                safe_remove "$item" true || true
+            done < <(command find "$cache_dir" -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
         fi
     fi
 }
@@ -489,10 +497,9 @@ clean_group_container_caches() {
     local total_size=0
     local cleaned_count=0
     local found_any=false
-    local _ng_state
-    _ng_state=$(shopt -p nullglob || true)
-    shopt -s nullglob
 
+    # Collect all non-Apple container directories first
+    local -a containers=()
     local container_dir
     for container_dir in "$group_containers_dir"/*; do
         [[ -d "$container_dir" ]] || continue
@@ -506,12 +513,18 @@ clean_group_container_caches() {
                 continue
                 ;;
         esac
+        containers+=("$container_dir")
+    done
 
+    # Process each container's candidate directories
+    for container_dir in "${containers[@]}"; do
+        local container_id
+        container_id=$(basename "$container_dir")
         local normalized_id="$container_id"
         [[ "$normalized_id" == group.* ]] && normalized_id="${normalized_id#group.}"
 
         local protected_container=false
-        if should_protect_data "$container_id" || should_protect_data "$normalized_id"; then
+        if should_protect_data "$container_id" 2> /dev/null || should_protect_data "$normalized_id" 2> /dev/null; then
             protected_container=true
         fi
 
@@ -532,38 +545,46 @@ clean_group_container_caches() {
         for candidate in "${candidates[@]}"; do
             [[ -d "$candidate" ]] || continue
             [[ -L "$candidate" ]] && continue
-            if is_path_whitelisted "$candidate"; then
-                continue
-            fi
-            if ! find "$candidate" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null | grep -q .; then
+            if is_path_whitelisted "$candidate" 2> /dev/null; then
                 continue
             fi
 
-            local candidate_size_kb=0
-            local candidate_changed=false
+            # Build non-protected candidate items for cleanup.
+            local -a items_to_clean=()
             local item
             while IFS= read -r -d '' item; do
                 [[ -e "$item" ]] || continue
                 [[ -L "$item" ]] && continue
-                if should_protect_path "$item" || is_path_whitelisted "$item"; then
+                if should_protect_path "$item" 2> /dev/null || is_path_whitelisted "$item" 2> /dev/null; then
                     continue
-                fi
-
-                local item_size_kb
-                item_size_kb=$(get_path_size_kb "$item")
-                [[ "$item_size_kb" =~ ^[0-9]+$ ]] || item_size_kb=0
-
-                if [[ "$DRY_RUN" == "true" ]]; then
-                    candidate_changed=true
-                    ((candidate_size_kb += item_size_kb))
-                    continue
-                fi
-
-                if safe_remove "$item" true; then
-                    candidate_changed=true
-                    ((candidate_size_kb += item_size_kb))
+                else
+                    items_to_clean+=("$item")
                 fi
             done < <(command find "$candidate" -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
+
+            [[ ${#items_to_clean[@]} -gt 0 ]] || continue
+
+            local candidate_size_kb=0
+            local candidate_changed=false
+            if [[ "$DRY_RUN" == "true" ]]; then
+                for item in "${items_to_clean[@]}"; do
+                    local item_size
+                    item_size=$(get_path_size_kb "$item" 2> /dev/null) || item_size=0
+                    [[ "$item_size" =~ ^[0-9]+$ ]] || item_size=0
+                    candidate_changed=true
+                    ((candidate_size_kb += item_size))
+                done
+            else
+                for item in "${items_to_clean[@]}"; do
+                    local item_size
+                    item_size=$(get_path_size_kb "$item" 2> /dev/null) || item_size=0
+                    [[ "$item_size" =~ ^[0-9]+$ ]] || item_size=0
+                    if safe_remove "$item" true 2> /dev/null; then
+                        candidate_changed=true
+                        ((candidate_size_kb += item_size))
+                    fi
+                done
+            fi
 
             if [[ "$candidate_changed" == "true" ]]; then
                 ((total_size += candidate_size_kb))
@@ -573,7 +594,6 @@ clean_group_container_caches() {
         done
     done
 
-    eval "$_ng_state"
     stop_section_spinner
 
     if [[ "$found_any" == "true" ]]; then
@@ -681,8 +701,10 @@ clean_application_support_logs() {
     shopt -s nullglob
     for app_dir in ~/Library/Application\ Support/*; do
         [[ -d "$app_dir" ]] || continue
-        local app_name=$(basename "$app_dir")
-        local app_name_lower=$(echo "$app_name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+        local app_name
+        app_name=$(basename "$app_dir")
+        local app_name_lower
+        app_name_lower=$(echo "$app_name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
         local is_protected=false
         if should_protect_data "$app_name"; then
             is_protected=true
@@ -699,20 +721,17 @@ clean_application_support_logs() {
         for candidate in "${start_candidates[@]}"; do
             if [[ -d "$candidate" ]]; then
                 if find "$candidate" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null | grep -q .; then
-                    local size=$(get_path_size_kb "$candidate")
+                    local size
+                    size=$(get_path_size_kb "$candidate")
                     ((total_size += size))
                     ((cleaned_count++))
                     found_any=true
                     if [[ "$DRY_RUN" != "true" ]]; then
-                        # For directories with many files, use find -delete for performance
-                        # This avoids shell expansion and individual safe_remove calls
-                        if ! find "$candidate" -mindepth 1 -delete 2> /dev/null; then
-                            # Fallback: try item-by-item if find fails
-                            for item in "$candidate"/*; do
-                                [[ -e "$item" ]] || continue
-                                safe_remove "$item" true > /dev/null 2>&1 || true
-                            done
-                        fi
+                        local item
+                        while IFS= read -r -d '' item; do
+                            [[ -e "$item" ]] || continue
+                            safe_remove "$item" true > /dev/null 2>&1 || true
+                        done < <(command find "$candidate" -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
                     fi
                 fi
             fi
@@ -728,20 +747,17 @@ clean_application_support_logs() {
         for candidate in "${gc_candidates[@]}"; do
             if [[ -d "$candidate" ]]; then
                 if find "$candidate" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null | grep -q .; then
-                    local size=$(get_path_size_kb "$candidate")
+                    local size
+                    size=$(get_path_size_kb "$candidate")
                     ((total_size += size))
                     ((cleaned_count++))
                     found_any=true
                     if [[ "$DRY_RUN" != "true" ]]; then
-                        # For directories with many files, use find -delete for performance
-                        # This avoids shell expansion and individual safe_remove calls
-                        if ! find "$candidate" -mindepth 1 -delete 2> /dev/null; then
-                            # Fallback: try item-by-item if find fails
-                            for item in "$candidate"/*; do
-                                [[ -e "$item" ]] || continue
-                                safe_remove "$item" true > /dev/null 2>&1 || true
-                            done
-                        fi
+                        local item
+                        while IFS= read -r -d '' item; do
+                            [[ -e "$item" ]] || continue
+                            safe_remove "$item" true > /dev/null 2>&1 || true
+                        done < <(command find "$candidate" -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
                     fi
                 fi
             fi
@@ -750,7 +766,8 @@ clean_application_support_logs() {
     eval "$_ng_state"
     stop_section_spinner
     if [[ "$found_any" == "true" ]]; then
-        local size_human=$(bytes_to_human "$((total_size * 1024))")
+        local size_human
+        size_human=$(bytes_to_human "$((total_size * 1024))")
         if [[ "$DRY_RUN" == "true" ]]; then
             echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Application Support logs/caches${NC}, ${YELLOW}$size_human dry${NC}"
         else
@@ -767,9 +784,11 @@ check_ios_device_backups() {
     local backup_dir="$HOME/Library/Application Support/MobileSync/Backup"
     # Simplified check without find to avoid hanging.
     if [[ -d "$backup_dir" ]]; then
-        local backup_kb=$(get_path_size_kb "$backup_dir")
+        local backup_kb
+        backup_kb=$(get_path_size_kb "$backup_dir")
         if [[ -n "${backup_kb:-}" && "$backup_kb" -gt 102400 ]]; then
-            local backup_human=$(command du -shP "$backup_dir" 2> /dev/null | awk '{print $1}')
+            local backup_human
+            backup_human=$(command du -shP "$backup_dir" 2> /dev/null | awk '{print $1}')
             if [[ -n "$backup_human" ]]; then
                 note_activity
                 echo -e "  ${YELLOW}${ICON_WARNING}${NC} iOS backups: ${GREEN}${backup_human}${NC}${GRAY}, Path: $backup_dir${NC}"

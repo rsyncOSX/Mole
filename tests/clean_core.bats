@@ -107,7 +107,7 @@ EOF
     [ -f "$HOME/Documents/.DS_Store" ]
 }
 
-@test "clean_recent_items removes shared file lists" {
+@test "_clean_recent_items removes shared file lists" {
     local shared_dir="$HOME/Library/Application Support/com.apple.sharedfilelist"
     mkdir -p "$shared_dir"
     touch "$shared_dir/com.apple.LSSharedFileList.RecentApplications.sfl2"
@@ -120,14 +120,14 @@ source "$PROJECT_ROOT/lib/clean/user.sh"
 safe_clean() {
     echo "safe_clean $1"
 }
-clean_recent_items
+_clean_recent_items
 EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"Recent"* ]]
 }
 
-@test "clean_recent_items handles missing shared directory" {
+@test "_clean_recent_items handles missing shared directory" {
     rm -rf "$HOME/Library/Application Support/com.apple.sharedfilelist"
 
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
@@ -137,13 +137,13 @@ source "$PROJECT_ROOT/lib/clean/user.sh"
 safe_clean() {
     echo "safe_clean $1"
 }
-clean_recent_items
+_clean_recent_items
 EOF
 
     [ "$status" -eq 0 ]
 }
 
-@test "clean_mail_downloads skips cleanup when size below threshold" {
+@test "_clean_mail_downloads skips cleanup when size below threshold" {
     mkdir -p "$HOME/Library/Mail Downloads"
     echo "test" > "$HOME/Library/Mail Downloads/small.txt"
 
@@ -151,14 +151,14 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/user.sh"
-clean_mail_downloads
+_clean_mail_downloads
 EOF
 
     [ "$status" -eq 0 ]
     [ -f "$HOME/Library/Mail Downloads/small.txt" ]
 }
 
-@test "clean_mail_downloads removes old attachments" {
+@test "_clean_mail_downloads removes old attachments" {
     mkdir -p "$HOME/Library/Mail Downloads"
     touch "$HOME/Library/Mail Downloads/old.pdf"
     touch -t 202301010000 "$HOME/Library/Mail Downloads/old.pdf"
@@ -171,7 +171,7 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/user.sh"
-clean_mail_downloads
+_clean_mail_downloads
 EOF
 
     [ "$status" -eq 0 ]
