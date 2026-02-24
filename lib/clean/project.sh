@@ -627,10 +627,10 @@ select_purge_categories() {
         local selected_value
         local selected_unit
 
-        if (( selected_size < 1024 )); then
+        if ((selected_size < 1024)); then
             selected_value="$selected_size"
             selected_unit="KB"
-        elif (( selected_size < 1024 * 1024 )); then
+        elif ((selected_size < 1024 * 1024)); then
             selected_value=$(printf "%.2f" "$(echo "scale=4; $selected_size/1024" | bc)")
             selected_unit="MB"
         else
