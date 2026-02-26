@@ -7,7 +7,17 @@ clean_tool_cache() {
     local description="$1"
     shift
     if [[ "$DRY_RUN" != "true" ]]; then
+        local command_succeeded=false
+        if [[ -t 1 ]]; then
+            start_section_spinner "Cleaning $description..."
+        fi
         if "$@" > /dev/null 2>&1; then
+            command_succeeded=true
+        fi
+        if [[ -t 1 ]]; then
+            stop_section_spinner
+        fi
+        if [[ "$command_succeeded" == "true" ]]; then
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $description"
         fi
     else

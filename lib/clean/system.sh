@@ -5,6 +5,7 @@ set -euo pipefail
 clean_deep_system() {
     stop_section_spinner
     local cache_cleaned=0
+    start_section_spinner "Cleaning system caches..."
     # Optimized: Single pass for /Library/Caches (3 patterns in 1 scan)
     if sudo test -d "/Library/Caches" 2> /dev/null; then
         while IFS= read -r -d '' file; do
@@ -20,6 +21,7 @@ clean_deep_system() {
             \( -name "*.log" -mtime "+$MOLE_LOG_AGE_DAYS" \) \
             \) -print0 2> /dev/null || true)
     fi
+    stop_section_spinner
     [[ $cache_cleaned -eq 1 ]] && log_success "System caches"
     start_section_spinner "Cleaning system temporary files..."
     local tmp_cleaned=0
@@ -147,7 +149,7 @@ clean_deep_system() {
     done
     stop_section_spinner
     [[ $installer_cleaned -gt 0 ]] && debug_log "Cleaned $installer_cleaned macOS installer(s)"
-    start_section_spinner "Scanning system caches..."
+    start_section_spinner "Scanning browser code signature caches..."
     local code_sign_cleaned=0
     while IFS= read -r -d '' cache_dir; do
         if safe_sudo_remove "$cache_dir"; then
@@ -158,11 +160,16 @@ clean_deep_system() {
     [[ $code_sign_cleaned -gt 0 ]] && log_success "Browser code signature caches, $code_sign_cleaned items"
 
     local diag_base="/private/var/db/diagnostics"
+    start_section_spinner "Cleaning system diagnostic logs..."
     safe_sudo_find_delete "$diag_base" "*" "$MOLE_LOG_AGE_DAYS" "f" || true
     safe_sudo_find_delete "$diag_base" "*.tracev3" "30" "f" || true
     safe_sudo_find_delete "/private/var/db/DiagnosticPipeline" "*" "$MOLE_LOG_AGE_DAYS" "f" || true
+    stop_section_spinner
     log_success "System diagnostic logs"
+
+    start_section_spinner "Cleaning power logs..."
     safe_sudo_find_delete "/private/var/db/powerlog" "*" "$MOLE_LOG_AGE_DAYS" "f" || true
+    stop_section_spinner
     log_success "Power logs"
     start_section_spinner "Cleaning memory exception reports..."
     local mem_reports_dir="/private/var/db/reportmemoryexception/MemoryLimitViolations"

@@ -76,8 +76,13 @@ _clean_mail_downloads() {
     )
     local count=0
     local cleaned_kb=0
+    local spinner_active=false
     for target_path in "${mail_dirs[@]}"; do
         if [[ -d "$target_path" ]]; then
+            if [[ "$spinner_active" == "false" && -t 1 ]]; then
+                start_section_spinner "Cleaning old Mail attachments..."
+                spinner_active=true
+            fi
             local dir_size_kb=0
             dir_size_kb=$(get_path_size_kb "$target_path")
             if ! [[ "$dir_size_kb" =~ ^[0-9]+$ ]]; then
@@ -102,6 +107,9 @@ _clean_mail_downloads() {
             done < <(command find "$target_path" -type f -mtime +"$mail_age_days" -print0 2> /dev/null || true)
         fi
     done
+    if [[ "$spinner_active" == "true" ]]; then
+        stop_section_spinner
+    fi
     if [[ $count -gt 0 ]]; then
         local cleaned_mb
         cleaned_mb=$(echo "$cleaned_kb" | awk '{printf "%.1f", $1/1024}' || echo "0.0")
@@ -832,8 +840,12 @@ clean_application_support_logs() {
                         local current_time
                         current_time=$(get_epoch_seconds)
                         if [[ "$current_time" =~ ^[0-9]+$ ]] && ((current_time - last_progress_update >= 1)); then
+                            local app_label="$app_name"
+                            if [[ ${#app_label} -gt 24 ]]; then
+                                app_label="${app_label:0:21}..."
+                            fi
                             stop_section_spinner
-                            start_section_spinner "Scanning Application Support... $app_count/$total_apps ($app_name: $candidate_item_count items)"
+                            start_section_spinner "Scanning Application Support... $app_count/$total_apps [$app_label, $candidate_item_count items]"
                             last_progress_update=$current_time
                         fi
                     fi
@@ -883,8 +895,12 @@ clean_application_support_logs() {
                         local current_time
                         current_time=$(get_epoch_seconds)
                         if [[ "$current_time" =~ ^[0-9]+$ ]] && ((current_time - last_progress_update >= 1)); then
+                            local container_label="$container"
+                            if [[ ${#container_label} -gt 24 ]]; then
+                                container_label="${container_label:0:21}..."
+                            fi
                             stop_section_spinner
-                            start_section_spinner "Scanning Application Support... group container ($container: $candidate_item_count items)"
+                            start_section_spinner "Scanning Application Support... group [$container_label, $candidate_item_count items]"
                             last_progress_update=$current_time
                         fi
                     fi

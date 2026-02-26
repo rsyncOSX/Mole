@@ -287,9 +287,40 @@ show_menu_option() {
 INLINE_SPINNER_PID=""
 INLINE_SPINNER_STOP_FILE=""
 
+# Keep spinner message on one line and avoid wrapping/noisy output on narrow terminals.
+format_spinner_message() {
+    local message="$1"
+    message="${message//$'\r'/ }"
+    message="${message//$'\n'/ }"
+
+    local cols=80
+    if command -v tput > /dev/null 2>&1; then
+        cols=$(tput cols 2> /dev/null || echo "80")
+    fi
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+
+    # Reserve space for prefix + spinner char + spacing.
+    local available=$((cols - 8))
+    if [[ $available -lt 20 ]]; then
+        available=20
+    fi
+
+    if [[ ${#message} -gt $available ]]; then
+        if [[ $available -gt 3 ]]; then
+            message="${message:0:$((available - 3))}..."
+        else
+            message="${message:0:$available}"
+        fi
+    fi
+
+    printf "%s" "$message"
+}
+
 start_inline_spinner() {
     stop_inline_spinner 2> /dev/null || true
     local message="$1"
+    local display_message
+    display_message=$(format_spinner_message "$message")
 
     if [[ -t 1 ]]; then
         # Create unique stop flag file for this spinner instance
@@ -309,7 +340,7 @@ start_inline_spinner() {
             while [[ ! -f "$stop_file" ]]; do
                 local c="${chars:$((i % ${#chars})):1}"
                 # Output to stderr to avoid interfering with stdout
-                printf "\r${MOLE_SPINNER_PREFIX:-}${BLUE}%s${NC} %s" "$c" "$message" >&2 || break
+                printf "\r${MOLE_SPINNER_PREFIX:-}${BLUE}%s${NC} %s" "$c" "$display_message" >&2 || break
                 ((i++))
                 sleep 0.05
             done
@@ -321,7 +352,7 @@ start_inline_spinner() {
         INLINE_SPINNER_PID=$!
         disown "$INLINE_SPINNER_PID" 2> /dev/null || true
     else
-        echo -n "  ${BLUE}|${NC} $message" >&2 || true
+        echo -n "  ${BLUE}|${NC} $display_message" >&2 || true
     fi
 }
 
