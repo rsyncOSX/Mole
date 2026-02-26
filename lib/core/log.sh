@@ -363,7 +363,12 @@ print_summary_block() {
         fi
     done
 
-    local divider="======================================================================"
+    local _tw
+    _tw=$(tput cols 2> /dev/null || echo 70)
+    [[ "$_tw" =~ ^[0-9]+$ ]] || _tw=70
+    [[ $_tw -gt 70 ]] && _tw=70
+    local divider
+    divider=$(printf '%*s' "$_tw" '' | tr ' ' '=')
 
     # Print with dividers
     echo ""
