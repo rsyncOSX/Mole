@@ -131,6 +131,10 @@ type cardData struct {
 }
 
 func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int, catHidden bool) (string, string) {
+	if termWidth <= 0 {
+		termWidth = 80
+	}
+
 	title := titleStyle.Render("Status")
 
 	scoreStyle := getScoreStyle(m.HealthScore)
@@ -169,7 +173,20 @@ func renderHeader(m MetricsSnapshot, errMsg string, animFrame int, termWidth int
 		infoParts = append(infoParts, subtleStyle.Render("up "+m.Uptime))
 	}
 
-	headerLine := title + "  " + scoreText + "  " + strings.Join(infoParts, " · ")
+	headLeft := title + "  " + scoreText
+	baseLines := wrapToWidth(headLeft, termWidth)
+	headerLines := append([]string{}, baseLines...)
+	if len(infoParts) > 0 {
+		headRight := strings.Join(infoParts, " · ")
+		combined := headLeft + "  " + headRight
+		if lipgloss.Width(combined) <= termWidth {
+			headerLines = wrapToWidth(combined, termWidth)
+		} else {
+			wrappedRight := wrapToWidth(headRight, termWidth)
+			headerLines = append(baseLines, wrappedRight...)
+		}
+	}
+	headerLine := lipgloss.JoinVertical(lipgloss.Left, headerLines...)
 
 	// Show cat unless hidden - render mole centered below header
 	var mole string
@@ -596,16 +613,38 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
 }
 
 func renderCard(data cardData, width int, height int) string {
-	titleText := data.icon + " " + data.title
-	lineLen := max(width-lipgloss.Width(titleText)-2, 4)
-	header := titleStyle.Render(titleText) + "  " + lineStyle.Render(strings.Repeat("╌", lineLen))
-	content := header + "\n" + strings.Join(data.lines, "\n")
+	if width <= 0 {
+		width = colWidth
+	}
 
-	lines := strings.Split(content, "\n")
+	titleText := data.icon + " " + data.title
+	lineLen := width - lipgloss.Width(titleText) - 2
+	if lineLen < 0 {
+		lineLen = 0
+	}
+
+	header := titleStyle.Render(titleText)
+	if lineLen > 0 {
+		header += "  " + lineStyle.Render(strings.Repeat("╌", lineLen))
+	}
+
+	lines := wrapToWidth(header, width)
+	for _, line := range data.lines {
+		lines = append(lines, wrapToWidth(line, width)...)
+	}
+
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func wrapToWidth(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	wrapped := lipgloss.NewStyle().MaxWidth(width).Render(text)
+	return strings.Split(wrapped, "\n")
 }
 
 func progressBar(percent float64) string {
