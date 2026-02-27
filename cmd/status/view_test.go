@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestFormatRate(t *testing.T) {
@@ -931,6 +933,46 @@ func TestRenderHeaderErrorReturnsMoleOnce(t *testing.T) {
 	}
 	if strings.Count(header, "/\\_/\\") != 1 {
 		t.Fatalf("renderHeader() should contain one mole frame in error state, got %d", strings.Count(header, "/\\_/\\"))
+	}
+}
+
+func TestRenderHeaderWrapsOnNarrowWidth(t *testing.T) {
+	m := MetricsSnapshot{
+		HealthScore: 91,
+		Hardware: HardwareInfo{
+			Model:       "MacBook Pro",
+			CPUModel:    "Apple M3 Max",
+			TotalRAM:    "128GB",
+			DiskSize:    "4TB",
+			RefreshRate: "120Hz",
+			OSVersion:   "macOS 15.0",
+		},
+		Uptime: "10d 3h",
+	}
+
+	header, _ := renderHeader(m, "", 0, 38, true)
+	for _, line := range strings.Split(header, "\n") {
+		if lipgloss.Width(stripANSI(line)) > 38 {
+			t.Fatalf("renderHeader() line exceeds width: %q", line)
+		}
+	}
+}
+
+func TestRenderCardWrapsOnNarrowWidth(t *testing.T) {
+	card := cardData{
+		icon:  iconCPU,
+		title: "CPU",
+		lines: []string{
+			"Total  ████████████████  100.0% @ 85.0°C",
+			"Load   12.34 / 8.90 / 7.65, 4P+4E",
+		},
+	}
+
+	rendered := renderCard(card, 26, 0)
+	for _, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(stripANSI(line)) > 26 {
+			t.Fatalf("renderCard() line exceeds width: %q", line)
+		}
 	}
 }
 
