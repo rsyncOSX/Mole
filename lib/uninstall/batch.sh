@@ -736,9 +736,13 @@ batch_uninstall_applications() {
     printf '\n'
 
     if [[ $success_count -gt 0 && ${#success_items[@]} -gt 0 ]]; then
-        # Refresh LaunchServices synchronously so Spotlight removes the app immediately.
-        refresh_launch_services_after_uninstall 2> /dev/null || true
-        remove_apps_from_dock "${success_items[@]}" 2> /dev/null || true
+        # Kick off LaunchServices rebuild in background immediately after summary.
+        # The caller shows a 3s "Press Enter" prompt, giving the rebuild time to finish
+        # before the user returns to the app list — fixes stale Spotlight entries (#490).
+        (
+            refresh_launch_services_after_uninstall 2> /dev/null || true
+            remove_apps_from_dock "${success_items[@]}" 2> /dev/null || true
+        ) > /dev/null 2>&1 &
     fi
 
     # brew autoremove can be slow — run in background so the prompt returns quickly.
