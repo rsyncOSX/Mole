@@ -102,9 +102,9 @@ setup() {
         HOME="$HOME" bash --noprofile --norc << 'EOF'
 source "$PROJECT_ROOT/lib/core/common.sh"
 bytes_to_human 512
-bytes_to_human 2048
-bytes_to_human $((5 * 1024 * 1024))
-bytes_to_human $((3 * 1024 * 1024 * 1024))
+bytes_to_human 2000
+bytes_to_human 5000000
+bytes_to_human 3000000000
 EOF
     )"
 
