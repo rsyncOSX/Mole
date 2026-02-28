@@ -34,26 +34,26 @@ setup() {
 }
 
 @test "bytes_to_human produces correct output for GB range" {
-    result=$(bytes_to_human 1073741824)
+    result=$(bytes_to_human 1000000000)
     [ "$result" = "1.00GB" ]
 
-    result=$(bytes_to_human 5368709120)
+    result=$(bytes_to_human 5000000000)
     [ "$result" = "5.00GB" ]
 }
 
 @test "bytes_to_human produces correct output for MB range" {
-    result=$(bytes_to_human 1048576)
+    result=$(bytes_to_human 1000000)
     [ "$result" = "1.0MB" ]
 
-    result=$(bytes_to_human 104857600)
+    result=$(bytes_to_human 100000000)
     [ "$result" = "100.0MB" ]
 }
 
 @test "bytes_to_human produces correct output for KB range" {
-    result=$(bytes_to_human 1024)
+    result=$(bytes_to_human 1000)
     [ "$result" = "1KB" ]
 
-    result=$(bytes_to_human 10240)
+    result=$(bytes_to_human 10000)
     [ "$result" = "10KB" ]
 }
 
