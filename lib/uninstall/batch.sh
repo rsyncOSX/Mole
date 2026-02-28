@@ -735,26 +735,15 @@ batch_uninstall_applications() {
     print_summary_block "$title" "${summary_details[@]}"
     printf '\n'
 
-    # Run non-critical post-cleanup tasks asynchronously so the next prompt appears immediately.
-    # These tasks are best-effort and should not block interactive flow.
-    if [[ $brew_apps_removed -gt 0 || ($success_count -gt 0 && ${#success_items[@]} -gt 0) ]]; then
-        local -a post_success_items=("${success_items[@]}")
-        local post_brew_apps_removed="$brew_apps_removed"
+    if [[ $success_count -gt 0 && ${#success_items[@]} -gt 0 ]]; then
+        # Refresh LaunchServices synchronously so Spotlight removes the app immediately.
+        refresh_launch_services_after_uninstall 2> /dev/null || true
+        remove_apps_from_dock "${success_items[@]}" 2> /dev/null || true
+    fi
 
-        if [[ -t 1 ]]; then
-            echo -e "${GRAY}${ICON_LIST}${NC} Finalizing uninstall cleanup in background..."
-        fi
-
-        (
-            if [[ "$post_brew_apps_removed" -gt 0 ]]; then
-                HOMEBREW_NO_ENV_HINTS=1 brew autoremove > /dev/null 2>&1 || true
-            fi
-
-            if [[ ${#post_success_items[@]} -gt 0 ]]; then
-                remove_apps_from_dock "${post_success_items[@]}" 2> /dev/null || true
-                refresh_launch_services_after_uninstall 2> /dev/null || true
-            fi
-        ) > /dev/null 2>&1 &
+    # brew autoremove can be slow — run in background so the prompt returns quickly.
+    if [[ $brew_apps_removed -gt 0 ]]; then
+        (HOMEBREW_NO_ENV_HINTS=1 brew autoremove > /dev/null 2>&1 || true) &
     fi
 
     _cleanup_sudo_keepalive
