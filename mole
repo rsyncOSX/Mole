@@ -188,50 +188,6 @@ ${GREEN}|_|  |_|\___/|_|\___|${NC}  ${GREEN}${MOLE_TAGLINE}${NC}
 EOF
 }
 
-animate_mole_intro() {
-    if [[ ! -t 1 ]]; then
-        return
-    fi
-
-    clear_screen
-    printf '\n'
-    hide_cursor
-
-    local -a mole_lines=()
-
-    while IFS= read -r line; do
-        mole_lines+=("$line")
-    done << 'EOF'
-        /\_/\
-   ____/ o o \
- /~____  =o= /
-(______)__m_m)
-        /   \
-     __/ /\ \__
-    /__/  \__\_
-EOF
-
-    local idx
-    local body_cutoff=4
-    local body_color="${PURPLE}"
-    local ground_color="${GREEN}"
-
-    for idx in "${!mole_lines[@]}"; do
-        if ((idx < body_cutoff)); then
-            printf "%s\n" "${body_color}${mole_lines[$idx]}${NC}"
-        else
-            printf "%s\n" "${ground_color}${mole_lines[$idx]}${NC}"
-        fi
-        sleep 0.1
-    done
-
-    printf '\n'
-    sleep 0.5
-
-    printf '\033[2J\033[H'
-    show_cursor
-}
-
 show_version() {
     local os_ver
     if command -v sw_vers > /dev/null; then
@@ -796,20 +752,6 @@ show_main_menu() {
 }
 
 interactive_main_menu() {
-    if [[ -t 1 ]]; then
-        local tty_name
-        tty_name=$(tty 2> /dev/null || echo "")
-        if [[ -n "$tty_name" ]]; then
-            local flag_file
-            local cache_dir="$HOME/.cache/mole"
-            ensure_user_dir "$cache_dir"
-            flag_file="$cache_dir/intro_$(echo "$tty_name" | LC_ALL=C tr -c '[:alnum:]_' '_')"
-            if [[ ! -f "$flag_file" ]]; then
-                animate_mole_intro
-                ensure_user_file "$flag_file"
-            fi
-        fi
-    fi
     local current_option=1
     local first_draw=true
     local brand_banner=""
